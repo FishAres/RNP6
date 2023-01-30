@@ -53,10 +53,10 @@ function get_fpolicy_models(θs, Ha_bounds; args=args)
     Θ = [θs[(inds[i]+1):inds[i+1], :] for i in 1:(length(inds)-1)]
 
     Enc_za_a = Chain(
-        HyDense(args[:π] + args[:asz], 64, Θ[1], elu), 
-        HyDense(64, args[:esz], Θ[2], elu), 
+        HyDense(args[:π] + args[:asz], 64, Θ[1], elu),
+        HyDense(64, args[:esz], Θ[2], elu),
         flatten
-        )
+    )
     f_policy = ps_to_RN(get_rn_θs(Θ[3], args[:esz], args[:π]); f_out=elu)
     Dec_z_a = Chain(HyDense(args[:π], args[:asz], Θ[4], sin), flatten)
     a0 = sin.(Θ[5])
@@ -163,7 +163,7 @@ function get_loop(x; args=args)
     return outputs
 end
 
-function train_model(opt, ps, train_data; args=args, epoch=1, logger=nothing, D=args[:D])
+function train_model(opt, ps, train_data; args=args, epoch=1, logger=nothing, D=args[:D], clip_grads=false)
     progress_tracker = Progress(length(train_data), 1, "Training epoch $epoch :)")
     losses = zeros(length(train_data))
     # initial z's drawn from N(0,1)
@@ -178,7 +178,7 @@ function train_model(opt, ps, train_data; args=args, epoch=1, logger=nothing, D=
             full_loss = args[:α] * rec_loss + args[:β] * klqp
             return full_loss + args[:λ] * (norm(Flux.params(Hx)) + norm(Flux.params(Ha)))
         end
-        # foreach(x -> clamp!(x, -0.1f0, 0.1f0), grad)
+        clip_grads && foreach(x -> clamp!(x, -0.1f0, 0.1f0), grad)
         Flux.update!(opt, ps, grad)
         losses[i] = loss
         ProgressMeter.next!(progress_tracker; showvalues=[(:loss, loss)])

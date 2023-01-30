@@ -208,24 +208,76 @@ begin
     p
 end
 
-a = batch.(collect(partition(eachcol(Z[:, sample_inds]), args[:bsz]))) |> gpu
-outputs, outputs_x̂ = let
-    out_, out_x̂_ = [], []
-    for z in a
-        out, out_x̂ = sample_levels(z, x) |> cpu
-        push!(out_, dropdims(out, dims=3))
-        push!(out_x̂_, dropdims(out_x̂, dims=3))
+
+function get_cat_z_outputs(Z, sample_inds; args=args)
+    a = batch.(collect(partition(eachcol(Z[:, sample_inds]), args[:bsz]))) |> gpu
+    outputs, outputs_x̂ = let
+        out_, out_x̂_ = [], []
+        for z in a
+            out, out_x̂ = sample_levels(z, x) |> cpu
+            push!(out_, dropdims(out, dims=3))
+            push!(out_x̂_, dropdims(out_x̂, dims=3))
+        end
+        out_, out_x̂_
     end
-    out_, out_x̂_
+    return outputs, outputs_x̂
 end
 
-outputs[1]
-out_cat = cat(outputs..., dims=3)
-out_cat_x̂ = cat(outputs_x̂..., dims=3)
+outputs, outputs_x̂ = get_cat_z_outputs(Z, sample_inds)
+
+function get_nearest_point(Ys, R::KmeansResult, cluster_ind)
+    centroid = argmin(sqrt.((Ys[:, 1] .- R.centers[1, cluster_ind]) .^ 2) + sqrt.((Ys[:, 2] .- R.centers[2, cluster_ind]) .^ 2))
+    return centroid
+end
+
+function get_centroid_image(Ys, R, Z, cluster_ind; plot=false)
+    zi = get_nearest_point(Ys, R, cluster_ind)
+    Zi = repeat(Z[:, zi], 1, args[:bsz]) |> gpu
+    out, out_x̂ = sample_levels(Zi, x) |> cpu
+    if plot
+        return plot_digit(out_x̂[:, :, 1, 1])
+    else
+        return out_x̂[:, :, 1, 1]
+    end
+end
+
 trunc_inds = inds[1:size(out_cat, 3)]
 
+
+
 begin
-    b = out_cat[:, :, trunc_inds.==4]
-    b = out_cat_x̂[:, :, trunc_inds.==4]
-    stack_ims(b, n=8) |> plot_digit
+    cluster_ims = [get_centroid_image(Ys, R, k) for k in 1:n_clusters]
+    p = plot(
+        xlim=(-100, 100),
+        ylim=(-100, 100),
+        axis=nothing,
+        xaxis=false,
+        yaxis=false,
+        legend=false,
+        size=(800, 800),
+    )
+
+    imsize = (12, 12)
+    imctr = imsize ./ 2
+    for i in 1:n_clusters
+        scatter!(Ys[inds.==i, 1], Ys[inds.==i, 2], c=i)
+    end
+
+    for i in 1:n_clusters
+        x, y = R.centers[:, i] .+ 7
+        heatmap!(
+            x-imctr[1]+1:x+imctr[1],
+            y-imctr[2]+1:y+imctr[2],
+            imresize(cluster_ims[i], 12, 12),
+            color=:grays,
+            clim=(0, 1),
+            alpha=0.9,
+            axis=nothing,
+        )
+    end
+    p
 end
+i = 1
+x, y = R.centers[:, i] .+ 7
+
+x-imctr[1]+1:imctr[1]

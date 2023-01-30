@@ -94,6 +94,23 @@ function stack_ims(xs; n=8)
     return vcat(rows_...)
 end
 
+function sample_levels(z, x; args=args)
+    θsz = Hx(z)
+    θsa = Ha(z)
+    models, z0, a0 = get_models(θsz, θsa; args=args)
+    z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=args[:scale_offset])
+    out_small = full_sequence(z1, patch_t)
+    out = sample_patch(out_small, a1, sampling_grid)
+    out_x̂ = sample_patch(x̂, a1, sampling_grid)
+    for t in 2:args[:seqlen]
+        z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x;
+            scale_offset=args[:scale_offset])
+        out_small = full_sequence(z1, patch_t)
+        out += sample_patch(out_small, a1, sampling_grid)
+        out_x̂ += sample_patch(x̂, a1, sampling_grid)
+    end
+    return out |> cpu, out_x̂ |> cpu
+end
 
 ## =====
 args[:π] = 16
@@ -178,10 +195,9 @@ end)
 ps = Flux.params(Hx, Ha, Encoder)
 
 ## ====
-
 x = first(test_loader)
-inds = sample(1:args[:bsz], 6; replace=false)
 let
+    inds = sample(1:args[:bsz], 6; replace=false)
     p = plot_recs(x, inds)
     display(p)
 end
@@ -198,7 +214,7 @@ args[:λpatch] = 0.0f0
 args[:D] = Normal(0.0f0, 1.0f0)
 
 args[:α] = 1.0f0
-args[:β] = 0.1f0
+args[:β] = 0.5f0
 
 args[:η] = 1e-4
 
@@ -209,15 +225,20 @@ log_value(lg, "lambda_patch", args[:λpatch])
 ## ====
 begin
     Ls = []
-    for epoch in 1:200
-        if epoch % 50 == 0
+    for epoch in 1:100
+        if epoch % 25 == 0
             opt.eta = 0.67 * opt.eta
             log_value(lg, "learning_rate", opt.eta)
-            args[:λpatch] += 1.0f-2
+
+        end
+        if epoch % 5 == 0
+            λpatch_lim = Float32(1 / args[:seqlen])
+            args[:λpatch] = min(args[:λpatch] + 2.0f-3, λpatch_lim)
             log_value(lg, "lambda_patch", args[:λpatch])
         end
+
         ls = train_model(opt, ps, train_loader; epoch=epoch, logger=lg)
-        inds = sample(1:args[:bsz], 6)
+        inds = sample(1:args[:bsz], 6, replace=false)
         p = plot_recs(sample_loader(test_loader), inds)
         display(p)
         log_image(lg, "recs_$(epoch)", p)
@@ -225,7 +246,10 @@ begin
         if epoch % 5 == 0
             z = randn(Float32, args[:π], args[:bsz]) |> gpu
             out = sample_(z, x)
-            psamp = stack_ims(out) |> plot_digit
+            out, out_x̂ = sample_levels(z, x)
+            psamp_out = plot_digit(stack_ims(out), title="2 level")
+            psamp_x̂ = plot_digit(stack_ims(out_x̂), title="1 level")
+            psamp = plot(psamp_out, psamp_x̂)
             log_image(lg, "sampling_$(epoch)", psamp)
             display(psamp)
         end
@@ -238,4 +262,15 @@ begin
         end
         push!(Ls, ls)
     end
+end
+## =====
+
+begin
+    z = randn(Float32, args[:π], args[:bsz]) |> gpu
+    out = sample_(z, x)
+    out, out_x̂ = sample_levels(z, x)
+    psamp_out = plot_digit(stack_ims(out), title="2 level")
+    psamp_x̂ = plot_digit(stack_ims(out_x̂), title="1 level")
+    psamp = plot(psamp_out, psamp_x̂)
+    display(psamp)
 end
