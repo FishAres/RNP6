@@ -44,10 +44,8 @@ function get_better_Ldict(Ldict; key="RLs")
 end
 
 
-better_Ldict = get_better_Ldict(parse_loss_dict(joinpath(model_dir, "GRU")))
+
 better_Ldict_LSTM = get_better_Ldict(parse_loss_dict(joinpath(model_dir, "LSTM")))
-
-
 
 function smoothed_loss(better_Ldict, n_filters; window=10)
     nf = string(n_filters)
@@ -57,6 +55,33 @@ end
 
 LSTM_losses = [smoothed_loss(better_Ldict, nf) for nf in [16, 32, 64]]
 scatter(1:3, LSTM_losses, legend=false)
+
+model_dirs = [
+    "saved_models/systematic_n_filters/GRU_recursive/GRU",
+    "saved_models/systematic_n_filters/GRU_recursive/LSTM",
+    "saved_models/systematic_n_filters/vanilla_VAE/mnist",
+]
+
+begin
+    Ls = Dict()
+    dir_tags = ["GRU", "LSTM", "Vanilla VAE"]
+    n_filters = [16, 32, 64]
+    for (i, model_dir) in enumerate(model_dirs)
+        Ls[dir_tags[i]] = Dict()
+        better_Ldict = get_better_Ldict(parse_loss_dict(model_dir))
+        losses_out = [smoothed_loss(better_Ldict, nf) for nf in n_filters]
+        [
+            begin
+                Ls[dir_tags[i]][string(n_filters[j])] = losses_out[j]
+            end
+            for j in 1:3
+        ]
+    end
+
+end
+
+Ls["GRU"]
+Ls["Vanilla VAE"]
 
 
 function plot_ribbon(x; fribbon=std, kwargs...)
