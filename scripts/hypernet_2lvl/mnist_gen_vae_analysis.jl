@@ -287,13 +287,16 @@ end
 ## =====
 begin
     p = plot(
-        xlim=(-100, 100),
-        ylim=(-100, 100),
+        xlim=(-110, 110),
+        ylim=(-110, 110),
         axis=nothing,
-        xaxis=false,
-        yaxis=false,
+        # xaxis=false,
+        # yaxis=false,
         legend=false,
         size=(800, 800),
+        xlabel="Dimension 1",
+        ylabel="Dimension 2",
+
     )
 
     for i in 1:n_clusters
