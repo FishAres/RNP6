@@ -265,19 +265,6 @@ begin
     for i in 1:n_clusters
         scatter!(Ys[inds.==i, 1], Ys[inds.==i, 2], c=i)
     end
-    savefig(p, "plots/mnist_tsne/tsne_scatter.pdf")
-end
-
-begin
-    p_ims = plot(
-        xlim=(-100, 100),
-        ylim=(-100, 100),
-        axis=nothing,
-        xaxis=false,
-        yaxis=false,
-        legend=false,
-        size=(800, 800),
-    )
 
     imsize = (12, 12)
     imctr = imsize ./ 2
@@ -294,7 +281,7 @@ begin
             grid=false,
         )
     end
-    p_ims
+    savefig(p, "plots/mnist_tsne/cluster_and_ims_reference.png")
 end
 ## =====
 
