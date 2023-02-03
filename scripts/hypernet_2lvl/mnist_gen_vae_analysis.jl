@@ -305,6 +305,8 @@ begin
             clim=(0, 1),
             alpha=0.9,
             axis=nothing,
+            colorbar=false,
+            color=:grays,
         )
         savefig(p, "plots/mnist_tsne/cluster#$i.pdf")
     end
