@@ -281,13 +281,31 @@ begin
             grid=false,
         )
     end
-    savefig(p, "plots/mnist_tsne/cluster_and_ims_reference.png")
+    # savefig(p, "plots/mnist_tsne/cluster_and_ims_reference.png")
+    p
 end
 ## =====
+begin
+    p = plot(
+        xlim=(-100, 100),
+        ylim=(-100, 100),
+        axis=nothing,
+        xaxis=false,
+        yaxis=false,
+        legend=false,
+        size=(800, 800),
+    )
+
+    for i in 1:n_clusters
+        scatter!(Ys[inds.==i, 1], Ys[inds.==i, 2], c=i)
+    end
+    savefig(p, "plots/mnist_tsne/tsne_clusters.png")
+    p
+end
 
 begin
     for i in 1:n_clusters
-        p = heatmap(
+        p = plot_digit(
             imresize(cluster_ims[i], 12, 12),
             clim=(0, 1),
             alpha=0.9,
@@ -295,7 +313,7 @@ begin
             colorbar=false,
             color=:grays,
         )
-        savefig(p, "plots/mnist_tsne/cluster#$i.pdf")
+        savefig(p, "plots/mnist_tsne/cluster#$i.png")
+        p
     end
 end
-
