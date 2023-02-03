@@ -38,7 +38,7 @@ args[:imzprod] = prod(args[:img_size])
 
 ## =====
 
-device!(0)
+device!(1)
 
 dev = gpu
 
@@ -96,7 +96,9 @@ end
 
 ## ======
 
-modelpath = "saved_models/hypernet_2lvl/mnist_2lvl/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.1_η=0.0001_λ=1e-6_λpatch=0.0_π=16_200eps.bson"
+# modelpath = "saved_models/hypernet_2lvl/mnist_2lvl/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.1_η=0.0001_λ=1e-6_λpatch=0.0_π=16_200eps.bson"
+
+modelpath = "saved_models/hypernet_2lvl/mnist_2lvl_inc_λpatch/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.5_η=0.0001_λ=1e-6_λpatch=0.04_π=16_100eps.bson"
 
 l_enc_za_z = (args[:π] + args[:asz]) * args[:esz] # encoder (z_t, a_t) -> z_t+1
 l_fx = get_rnn_θ_sizes(args[:esz], args[:π]) # μ, logvar
@@ -119,7 +121,7 @@ Ha_bounds = [l_enc_za_a; l_fa; l_dec_a]
 
 Hx, Ha, Encoder = load(modelpath)[:model] |> gpu
 
-model_args_dict = parse_savename("a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.1_η=0.0001_λ=1e-6_λpatch=0.0_π=16")[2]
+model_args_dict = parse_savename("a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.5_η=0.0001_λ=1e-6_λpatch=0.04_π=16")
 
 update_args_dict(model_args_dict, args)
 
@@ -191,7 +193,6 @@ end
 
 Z = shuffle_batchwise(z2s, z1s)
 sample_inds = sample(1:size(Z, 2), 4000, replace=false)
-
 
 Ys = tsne(Z[:, sample_inds]')
 scatter(Ys[:, 1], Ys[:, 2])

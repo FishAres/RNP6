@@ -112,7 +112,7 @@ function get_fstate_models(θs, Hx_bounds; args=args, fz=args[:f_z])
     Dec_z_x̂ = Chain(
         HyDense(args[:π], 64, Θ[3], elu),
         flatten,
-        HyDense(64, 2, Θ[4], identity),
+        HyDense(64, 2, Θ[4], elu),
         flatten)
 
     z0 = fz.(Θ[5])
@@ -202,6 +202,34 @@ end
     return A_rot, A_sc, A_shear, b
 end
 
+
+function train_model(opt, ps, train_data; args=args, epoch=1, logger=nothing, D=args[:D])
+    progress_tracker = Progress(length(train_data), 1, "Training epoch $epoch :)")
+    losses = zeros(length(train_data))
+    # initial z's drawn from N(0,1)
+    RLs, KLs = [], []
+    rs = gpu([rand(D, args[:π], args[:bsz]) for _ in 1:length(train_data)])
+    for (i, x) in enumerate(train_data)
+        loss, grad = withgradient(ps) do
+            rec_loss, klqp = model_loss(x, rs[i])
+            logger !== nothing && Zygote.ignore() do
+                log_value(lg, "rec_loss", rec_loss)
+                return log_value(lg, "KL loss", klqp)
+            end
+            Zygote.ignore() do
+                push!(KLs, klqp)
+                push!(RLs, rec_loss)
+            end
+            full_loss = args[:α] * rec_loss + args[:β] * klqp
+            return full_loss + args[:λ] * (norm(Flux.params(Hx)) + norm(Flux.params(Ha)))
+        end
+        # foreach(x -> clamp!(x, -0.1f0, 0.1f0), grad)
+        Flux.update!(opt, ps, grad)
+        losses[i] = loss
+        ProgressMeter.next!(progress_tracker; showvalues=[(:loss, loss)])
+    end
+    return losses, RLs, KLs
+end
 
 
 ## ==========
