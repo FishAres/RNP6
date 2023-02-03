@@ -59,4 +59,5 @@ function update_args_dict(model_args_dict, args)
     for key in keys(model_args_dict)
         args[Symbol(key)] = model_args_dict[key]
     end
+    args
 end

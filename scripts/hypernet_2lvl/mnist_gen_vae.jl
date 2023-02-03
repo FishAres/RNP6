@@ -38,7 +38,7 @@ args[:imzprod] = prod(args[:img_size])
 
 ## =====
 
-device!(0)
+device!(1)
 
 dev = gpu
 
@@ -225,9 +225,9 @@ log_value(lg, "lambda_patch", args[:λpatch])
 ## ====
 begin
     Ls = []
-    for epoch in 1:100
+    for epoch in 1:200
         if epoch % 25 == 0
-            opt.eta = 0.67 * opt.eta
+            opt.eta = 0.8 * opt.eta
             log_value(lg, "learning_rate", opt.eta)
 
         end
@@ -265,12 +265,3 @@ begin
 end
 ## =====
 
-begin
-    z = randn(Float32, args[:π], args[:bsz]) |> gpu
-    out = sample_(z, x)
-    out, out_x̂ = sample_levels(z, x)
-    psamp_out = plot_digit(stack_ims(out), title="2 level")
-    psamp_x̂ = plot_digit(stack_ims(out_x̂), title="1 level")
-    psamp = plot(psamp_out, psamp_x̂)
-    display(psamp)
-end

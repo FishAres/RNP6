@@ -95,10 +95,13 @@ function stack_ims(xs; n=8)
 end
 
 ## ======
-
+args[:π] = 16
 # modelpath = "saved_models/hypernet_2lvl/mnist_2lvl/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.1_η=0.0001_λ=1e-6_λpatch=0.0_π=16_200eps.bson"
 
-modelpath = "saved_models/hypernet_2lvl/mnist_2lvl_inc_λpatch/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.5_η=0.0001_λ=1e-6_λpatch=0.04_π=16_100eps.bson"
+# modelpath = "saved_models/hypernet_2lvl/mnist_2lvl_inc_λpatch/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.5_η=0.0001_λ=1e-6_λpatch=0.04_π=16_100eps.bson"
+
+modelpath = "saved_models/hypernet_2lvl/mnist_2lvl_inc_λpatch/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.5_η=0.0001_λ=1e-6_λpatch=0.08_π=16_200eps.bson"
+
 
 l_enc_za_z = (args[:π] + args[:asz]) * args[:esz] # encoder (z_t, a_t) -> z_t+1
 l_fx = get_rnn_θ_sizes(args[:esz], args[:π]) # μ, logvar
@@ -121,10 +124,14 @@ Ha_bounds = [l_enc_za_a; l_fa; l_dec_a]
 
 Hx, Ha, Encoder = load(modelpath)[:model] |> gpu
 
-model_args_dict = parse_savename("a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.5_η=0.0001_λ=1e-6_λpatch=0.04_π=16")
+model_args_dict = parse_savename(
+    "sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.5_η=0.0001_λ=1e-6_λpatch=0.08_π=16"
+)
 
-update_args_dict(model_args_dict, args)
+args = update_args_dict(model_args_dict, args)
 
+args[:seqlen] = 4
+args[:scale_offset] = 2.4f0
 ## ======
 x = first(test_loader)
 inds = sample(1:args[:bsz], 6; replace=false)
@@ -173,6 +180,7 @@ function shuffle_batchwise(x1, x2)
 end
 
 function sample_levels(z, x; args=args)
+    x = first(test_loader)
     θsz = Hx(z)
     θsa = Ha(z)
     models, z0, a0 = get_models(θsz, θsa; args=args)
@@ -192,25 +200,20 @@ end
 
 
 Z = shuffle_batchwise(z2s, z1s)
-sample_inds = sample(1:size(Z, 2), 4000, replace=false)
+n_samples = 80 * args[:bsz]
+
+sample_inds = sample(1:size(Z, 2), n_samples, replace=false)
+Z_ = Z[:, sample_inds]
 
 Ys = tsne(Z[:, sample_inds]')
 scatter(Ys[:, 1], Ys[:, 2])
 
-n_clusters = 40
-R = kmeans(Ys', n_clusters)
-inds = assignments(R)
 
-begin
-    p = plot(legend=false)
-    for i in 1:n_clusters
-        scatter!(Ys[inds.==i, 1], Ys[inds.==i, 2], c=i)
-    end
-    p
-end
+## ============
 
 
 function get_cat_z_outputs(Z, sample_inds; args=args)
+    x = first(test_loader)
     a = batch.(collect(partition(eachcol(Z[:, sample_inds]), args[:bsz]))) |> gpu
     outputs, outputs_x̂ = let
         out_, out_x̂_ = [], []
@@ -224,16 +227,15 @@ function get_cat_z_outputs(Z, sample_inds; args=args)
     return outputs, outputs_x̂
 end
 
-outputs, outputs_x̂ = get_cat_z_outputs(Z, sample_inds)
-
 function get_nearest_point(Ys, R::KmeansResult, cluster_ind)
     centroid = argmin(sqrt.((Ys[:, 1] .- R.centers[1, cluster_ind]) .^ 2) + sqrt.((Ys[:, 2] .- R.centers[2, cluster_ind]) .^ 2))
     return centroid
 end
 
 function get_centroid_image(Ys, R, Z, cluster_ind; plot=false)
+    x = first(test_loader)
     zi = get_nearest_point(Ys, R, cluster_ind)
-    Zi = repeat(Z[:, zi], 1, args[:bsz]) |> gpu
+    Zi = repeat(Z_[:, zi], 1, args[:bsz]) |> gpu
     out, out_x̂ = sample_levels(Zi, x) |> cpu
     if plot
         return plot_digit(out_x̂[:, :, 1, 1])
@@ -242,13 +244,32 @@ function get_centroid_image(Ys, R, Z, cluster_ind; plot=false)
     end
 end
 
-trunc_inds = inds[1:size(out_cat, 3)]
-
-
+begin
+    n_clusters = 45
+    R = kmeans(Ys', n_clusters)
+    inds = assignments(R)
+    cluster_ims = [get_centroid_image(Ys, R, Z, k) for k in 1:n_clusters]
+end
 
 begin
-    cluster_ims = [get_centroid_image(Ys, R, k) for k in 1:n_clusters]
     p = plot(
+        xlim=(-100, 100),
+        ylim=(-100, 100),
+        axis=nothing,
+        xaxis=false,
+        yaxis=false,
+        legend=false,
+        size=(800, 800),
+    )
+
+    for i in 1:n_clusters
+        scatter!(Ys[inds.==i, 1], Ys[inds.==i, 2], c=i)
+    end
+    savefig(p, "plots/mnist_tsne/tsne_scatter.pdf")
+end
+
+begin
+    p_ims = plot(
         xlim=(-100, 100),
         ylim=(-100, 100),
         axis=nothing,
@@ -261,10 +282,6 @@ begin
     imsize = (12, 12)
     imctr = imsize ./ 2
     for i in 1:n_clusters
-        scatter!(Ys[inds.==i, 1], Ys[inds.==i, 2], c=i)
-    end
-
-    for i in 1:n_clusters
         x, y = R.centers[:, i] .+ 7
         heatmap!(
             x-imctr[1]+1:x+imctr[1],
@@ -274,11 +291,22 @@ begin
             clim=(0, 1),
             alpha=0.9,
             axis=nothing,
+            grid=false,
         )
     end
-    p
+    p_ims
 end
-i = 1
-x, y = R.centers[:, i] .+ 7
+## =====
 
-x-imctr[1]+1:imctr[1]
+begin
+    for i in 1:n_clusters
+        p = heatmap(
+            imresize(cluster_ims[i], 12, 12),
+            clim=(0, 1),
+            alpha=0.9,
+            axis=nothing,
+        )
+        savefig(p, "plots/mnist_tsne/cluster#$i.pdf")
+    end
+end
+
