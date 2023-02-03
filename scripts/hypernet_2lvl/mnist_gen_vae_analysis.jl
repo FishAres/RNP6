@@ -294,13 +294,12 @@ begin
         # yaxis=false,
         legend=false,
         size=(800, 800),
-        xlabel="Dimension 1",
-        ylabel="Dimension 2",
-
+        # xlabel="Dimension 1",
+        # ylabel="Dimension 2",
     )
 
     for i in 1:n_clusters
-        scatter!(Ys[inds.==i, 1], Ys[inds.==i, 2], c=i)
+        scatter!(Ys[inds.==i, 2], Ys[inds.==i, 1], c=i)
     end
     savefig(p, "plots/mnist_tsne/tsne_clusters.png")
     p
