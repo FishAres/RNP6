@@ -253,8 +253,8 @@ end
 
 begin
     p = plot(
-        xlim=(-100, 100),
-        ylim=(-100, 100),
+        xlim=(-120, 120),
+        ylim=(-120, 120),
         axis=nothing,
         xaxis=false,
         yaxis=false,
@@ -281,14 +281,14 @@ begin
             grid=false,
         )
     end
-    savefig(p, "plots/mnist_tsne/cluster_and_ims_reference.png")
+    # savefig(p, "plots/mnist_tsne/cluster_and_ims_reference.png")
     p
 end
 ## =====
 begin
     p = plot(
-        xlim=(-110, 110),
-        ylim=(-110, 110),
+        xlim=(-120, 120),
+        ylim=(-120, 120),
         axis=nothing,
         # xaxis=false,
         # yaxis=false,
