@@ -281,7 +281,7 @@ begin
             grid=false,
         )
     end
-    # savefig(p, "plots/mnist_tsne/cluster_and_ims_reference.png")
+    savefig(p, "plots/mnist_tsne/cluster_and_ims_reference.png")
     p
 end
 ## =====
