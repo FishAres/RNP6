@@ -281,7 +281,7 @@ begin
             grid=false,
         )
     end
-    # savefig(p, "plots/mnist_tsne/cluster_and_ims_reference.png")
+    savefig(p, "plots/mnist_tsne/cluster_and_ims_reference.png")
     p
 end
 ## =====
@@ -297,9 +297,9 @@ begin
         # xlabel="Dimension 1",
         # ylabel="Dimension 2",
     )
-
+ 
     for i in 1:n_clusters
-        scatter!(Ys[inds.==i, 2], Ys[inds.==i, 1], c=i)
+        scatter!(Ys[inds.==i, 1], Ys[inds.==i, 2], c=i)
         # scatter!(Ys[inds.==i, 1], Ys[inds.==i, 2], c=i)
     end
     savefig(p, "plots/mnist_tsne/tsne_clusters.png")
