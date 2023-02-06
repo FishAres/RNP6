@@ -40,7 +40,7 @@ args[:imzprod] = prod(args[:img_size])
 
 ## =====
 
-device!(1)
+device!(0)
 
 dev = gpu
 
@@ -167,7 +167,7 @@ function plot_recs(x, inds; args=args)
 end
 
 ## =====
-args[:π] = 64
+args[:π] = 32
 args[:D] = Normal(0.0f0, 1.0f0)
 
 mEnc_za_z = Chain(
@@ -286,7 +286,7 @@ args[:λpatch] = 0.0f0
 args[:D] = Normal(0.0f0, 1.0f0)
 
 args[:α] = 1.0f0
-args[:β] = 0.01f0
+args[:β] = 0.001f0
 
 args[:η] = 1e-4
 
@@ -296,7 +296,7 @@ log_value(lg, "learning_rate", opt.eta)
 ## ====
 begin
     Ls = []
-    for epoch in 1:150
+    for epoch in 1:10
         if epoch % 50 == 0
             opt.eta = 0.67 * opt.eta
             log_value(lg, "learning_rate", opt.eta)

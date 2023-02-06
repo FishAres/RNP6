@@ -3,7 +3,9 @@ using DrWatson
 using LinearAlgebra, Statistics
 using JLD2
 using Plots
+pyplot()
 
+include(srcdir("gen_vae_utils.jl"))
 ## =====
 function plot_ribbon(x; fribbon=std, kwargs...)
     plot(mean(x), ribbon=fribbon(x); kwargs...)
@@ -48,7 +50,9 @@ begin
     begin
         p = plot_ribbon(Ls_vanilla ./ 64,
             label="Conv VAE",
-            foreground_color_legend=nothing)
+            foreground_color_legend=nothing,
+            grid=false,
+            thickness_scaling=1.5,)
         plot_ribbon!(Ls_H ./ 64, label="RNP 2-level")
         title!("Two primitives")
         ylabel!("MSE")
