@@ -279,14 +279,14 @@ alias = "omni_3lvl"
 save_dir = get_save_dir(save_folder, alias)
 
 ## =====
-args[:seqlen] = 3
-args[:scale_offset] = 1.4f0
+args[:seqlen] = 4
+args[:scale_offset] = 1.8f0
 args[:λ] = 1.0f-6
 args[:λpatch] = 0.0f0
 args[:D] = Normal(0.0f0, 1.0f0)
 
 args[:α] = 1.0f0
-args[:β] = 0.001f0
+args[:β] = 0.0f0
 
 args[:η] = 1e-4
 
@@ -296,7 +296,7 @@ log_value(lg, "learning_rate", opt.eta)
 ## ====
 begin
     Ls = []
-    for epoch in 1:10
+    for epoch in 1:50
         if epoch % 50 == 0
             opt.eta = 0.67 * opt.eta
             log_value(lg, "learning_rate", opt.eta)
@@ -328,3 +328,5 @@ begin
         push!(Ls, ls)
     end
 end
+
+plot(vcat(Ls...))
