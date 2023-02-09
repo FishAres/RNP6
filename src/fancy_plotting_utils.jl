@@ -4,9 +4,12 @@ using Images
 include(srcdir("utils.jl"))
 
 function orange_on_rgb(x, a, b, c)
-    a_ = a .+ x
+    # a_ = a .+ x
+    # b_ = b .+ 0.65 .* x
+    # c_ = c
+    a_ = a
     b_ = b .+ 0.65 .* x
-    c_ = c
+    c_ = c .+ x
     return a_, b_, c_
 end
 
@@ -19,10 +22,18 @@ function orange_on_rgb_array(xs)
     return ims
 end
 
+# function stack_ims(xs; n=8)
+#     n = n === nothing ? sqrt(length(xs)) : n
+#     rows_ = map(x -> hcat(x...), partition(xs, n))
+#     return cat(rows_...; dims=3)
+# end
+
 function stack_ims(xs; n=8)
     n = n === nothing ? sqrt(length(xs)) : n
+    xs = length(size(xs)) > 3 ? dropdims(xs, dims=3) : xs
+    xs = collect(eachslice(xs, dims=3))
     rows_ = map(x -> hcat(x...), partition(xs, n))
-    return cat(rows_...; dims=3)
+    return vcat(rows_...)
 end
 
 function impermute(x)
@@ -35,7 +46,7 @@ function impermute(x)
 end
 
 @inline function sample_patch_rgb(x, xy, sampling_grid; sc_offset=args[:scale_offset],
-                                  sz=args[:img_size])
+    sz=args[:img_size])
     ximg = reshape(x, sz..., 3, size(x)[end])
     sc_ = maprange(view(xy, 1:2, :), -1.0f0:1.0f0, sc_offset)
     xy_ = view(xy, 3:4, :)
@@ -44,7 +55,7 @@ end
 end
 
 function full_sequence_patches(models::Tuple, z0, a0, x; args=args,
-                               scale_offset=args[:scale_offset])
+    scale_offset=args[:scale_offset])
     patches, xys = [], []
     f_state, f_policy, Enc_za_z, Enc_za_a, Dec_z_x̂, Dec_z_a = models
     z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=scale_offset)
@@ -61,7 +72,7 @@ function full_sequence_patches(models::Tuple, z0, a0, x; args=args,
 end
 
 function full_sequence_patches(z::AbstractArray, x; args=args,
-                               scale_offset=args[:scale_offset])
+    scale_offset=args[:scale_offset])
     θsz = Hx(z)
     θsa = Ha(z)
     models, z0, a0 = get_models(θsz, θsa; args=args)
@@ -82,7 +93,7 @@ function get_loop_patches(x; args=args)
     push_to_arrays!((out_small, out1_patches, a1, xys_1), outputs)
     for t in 2:args[:seqlen]
         z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x;
-                                           scale_offset=args[:scale_offset])
+            scale_offset=args[:scale_offset])
         out1_patches, out_small, xys_1 = gpu(full_sequence_patches(z1, patch_t))
         # out_small = full_sequence(z1, patch_t)
         out += sample_patch(out_small, a1, sampling_grid)
@@ -154,8 +165,8 @@ function get_digit_parts(xs, batchind; savestring=nothing, format_=".png", resiz
     # ] |> cpu
 
     digit_patches = cpu([orange_on_rgb_array([sample_patch(sample_patch(sub_patch, xy,
-                                                                        sampling_grid), xy2,
-                                                           sampling_grid)
+            sampling_grid), xy2,
+        sampling_grid)
                                               for
                                               (sub_patch, xy, xy2) in
                                               zip(subpatch_vec, xy_vec, xys)])
