@@ -38,7 +38,7 @@ args[:imzprod] = prod(args[:img_size])
 
 ## =====
 
-device!(0)
+device!(1)
 
 dev = gpu
 
@@ -309,6 +309,8 @@ function get_loop_patches(x; args=args)
     return outputs
 end
 
+## =====
+
 eights = test_digits[:, :, test_labels.==8][:, :, 1:args[:bsz]] |> gpu
 
 recs, small_patches, patches, trans_patches, as, patches_t = get_loop_patches(eights)
@@ -325,8 +327,6 @@ function orange_on_rgb(xs)
     min.(cat(xs[1:3]..., dims=3) .+ orange_patch, 1.0f0)
 end
 
-
-a = orange_on_rgb(trans_patches)
 function view_patches_rgb(patches, ind)
     im_array = orange_on_rgb(patches)
     colorview(RGB, permutedims(im_array[:, :, :, ind], [3, 1, 2]))

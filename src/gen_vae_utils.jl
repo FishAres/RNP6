@@ -153,7 +153,7 @@ function get_loop(x; args=args)
     return outputs
 end
 
-function train_model(opt, ps, train_data; args=args, epoch=1, logger=nothing, D=args[:D])
+function train_model(opt, ps, train_data; args=args, epoch=1, logger=nothing, D=args[:D], clip_grads=false)
     progress_tracker = Progress(length(train_data), 1, "Training epoch $epoch :)")
     losses = zeros(length(train_data))
     # initial z's drawn from N(0,1)
@@ -168,7 +168,7 @@ function train_model(opt, ps, train_data; args=args, epoch=1, logger=nothing, D=
             full_loss = args[:α] * rec_loss + args[:β] * klqp
             return full_loss + args[:λ] * (norm(Flux.params(Hx)) + norm(Flux.params(Ha)))
         end
-        # foreach(x -> clamp!(x, -0.1f0, 0.1f0), grad)
+        clip_grads && foreach(x -> clamp!(x, -0.1f0, 0.1f0), grad)
         Flux.update!(opt, ps, grad)
         losses[i] = loss
         ProgressMeter.next!(progress_tracker; showvalues=[(:loss, loss)])
