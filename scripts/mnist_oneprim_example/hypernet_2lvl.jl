@@ -311,7 +311,7 @@ end
 
 ## =====
 
-eights = test_digits[:, :, test_labels.==8][:, :, 1:args[:bsz]] |> gpu
+eights = test_digits[:, :, test_labels.==0][:, :, 1:args[:bsz]] |> gpu
 
 recs, small_patches, patches, trans_patches, as, patches_t = get_loop_patches(eights)
 
@@ -332,7 +332,23 @@ function view_patches_rgb(patches, ind)
     colorview(RGB, permutedims(im_array[:, :, :, ind], [3, 1, 2]))
 end
 
-view_patches_rgb(trans_patches, 32)
+ind = 0
+begin
+    ind += 1
+    p = plot()
+    plot!(view_patches_rgb(trans_patches, ind))
+    title!("$ind")
+end
 
-view_patches_rgb(small_patches[2], 32)
+begin
+    batchind = 4
+    digit_label = "nine_1"
+    eight_1 = imresize(view_patches_rgb(trans_patches, batchind), (50, 50))
+    save("plots/oneprim_eights/$(digit_label).png", eight_1)
 
+    for ind in 1:args[:seqlen]
+        patch_img = imresize(view_patches_rgb(small_patches[ind], batchind), (50, 50))
+        save("plots/oneprim_eights/$(digit_label)patch_$ind.png", patch_img)
+    end
+
+end

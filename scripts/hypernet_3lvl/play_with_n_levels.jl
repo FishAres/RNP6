@@ -158,7 +158,7 @@ end
 ## =====
 args[:π] = 16
 args[:D] = Normal(0.0f0, 1.0f0)
-args[:n_levels] = 2
+args[:n_levels] = 4
 
 l_enc_za_z = (args[:π] + args[:asz]) * args[:esz] # encoder (z_t, a_t) -> z_t+1
 l_fx = get_rnn_θ_sizes(args[:esz], args[:π]) # μ, logvar
@@ -179,122 +179,52 @@ l_dec_a = args[:asz] * args[:π] + args[:asz] # decoder z -> a, with bias
 
 Ha_bounds = [l_enc_za_a; l_fa; l_dec_a]
 
-Hx = Chain(LayerNorm(args[:π]),
-    Dense(args[:π], 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, sum(Hx_bounds) + args[:π], bias=false),
-) |> gpu
+## ======
 
-Ha = Chain(LayerNorm(args[:π]),
-    Dense(args[:π], 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, sum(Ha_bounds) + args[:asz]; bias=false)
-) |> gpu
+modelpath = "saved_models/hypernet_3lvl/mnist_2s/a_sample_len=8_add_offset=true_asz=6_bsz=32_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_n_levels=4_scale_offset=1.6_seqlen=3_α=1.0_β=0.0_η=0.0001_λ=1e-6_λpatch=0.0_π=16_50eps.bson"
 
-# init_hyper!(Hx)
-# init_hyper!(Ha)
+Hx, Ha, Encoder = load(modelpath)[:model] |> gpu
 
-Encoder = gpu(let
-    enc1 = Chain(x -> reshape(x, args[:img_size]..., args[:img_channels], :),
-        Conv((5, 5), args[:img_channels] => 32),
-        BatchNorm(32, relu),
-        Conv((5, 5), 32 => 32),
-        BatchNorm(32, relu),
-        Conv((5, 5), 32 => 32),
-        BatchNorm(32, relu),
-        Conv((5, 5), 32 => 32),
-        BatchNorm(32, relu),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        flatten)
-    outsz = Flux.outputsize(enc1,
-        (args[:img_size]..., args[:img_channels],
-            args[:bsz]))
-    Chain(enc1,
-        Dense(outsz[1], 64),
-        LayerNorm(64, elu),
-        Dense(64, 64),
-        LayerNorm(64, elu),
-        Dense(64, 64),
-        LayerNorm(64, elu),
-        Dense(64, 64),
-        LayerNorm(64, elu),
-        Split(Dense(64, args[:π]), Dense(64, args[:π])))
-end)
+## =====
 
-ps = Flux.params(Hx, Ha, Encoder)
-
-## ====
-
-x = first(test_loader)
-inds = sample(1:args[:bsz], 6; replace=false)
-let
-    p = plot_recs(x, inds)
-    display(p)
+function RNP_decoder_patches(z, x, level; args=args)
+    θsz = Hx(z)
+    θsa = Ha(z)
+    models, z0, a0 = get_models(θsz, θsa; args=args)
+    z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=args[:scale_offset])
+    if level > 0
+        out_ = RNP_decoder(z1, patch_t, level - 1)
+        out = sample_patch(out_, a1, sampling_grid)
+    else
+        out = sample_patch(x̂, a1, sampling_grid)
+    end
+    for t in 2:args[:seqlen]
+        z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x;
+            scale_offset=args[:scale_offset])
+        if level > 0
+            out_ = RNP_decoder(z1, patch_t, level - 1)
+            out += sample_patch(out_, a1, sampling_grid)
+            push!()
+        else
+            out += sample_patch(x̂, a1, sampling_grid)
+        end
+    end
+    return out
 end
 
-## =====
-save_folder = "hypernet_3lvl"
-alias = "mnist_2s"
-save_dir = get_save_dir(save_folder, alias)
+function model_loss(x, r; args=args, level=args[:n_levels])
+    μ, logvar = Encoder(x)
+    z = sample_z(μ, logvar, r)
+    out = RNP_decoder(z, x, level)
+    rec_loss = Flux.mse(flatten(out), flatten(x); agg=sum)
+    klqp = kl_loss(μ, logvar)
+    return rec_loss, klqp
+end
 
-## =====
-args[:seqlen] = 3
-args[:scale_offset] = 1.6f0
-args[:λ] = 1.0f-6
-args[:λpatch] = 0.0f0
-args[:D] = Normal(0.0f0, 1.0f0)
-
-args[:α] = 1.0f0
-args[:β] = 0.0f0
-
-args[:η] = 1e-4
-
-opt = ADAM(args[:η])
-lg = new_logger(joinpath(save_folder, alias), args)
-log_value(lg, "learning_rate", opt.eta)
-## ====
-begin
-    Ls = []
-    x = first(test_loader)
-    for epoch in 1:50
-        if epoch % 50 == 0
-            opt.eta = 0.67 * opt.eta
-            log_value(lg, "learning_rate", opt.eta)
-        end
-        ls = train_model(opt, ps, train_loader; epoch=epoch, logger=lg, clip_grads=true)
-        inds = sample(1:args[:bsz], 6, replace=false)
-        p = plot_recs(sample_loader(test_loader), inds)
-        display(p)
-        log_image(lg, "recs_$(epoch)", p)
-
-        if epoch % 5 == 0
-            z = randn(Float32, args[:π], args[:bsz]) |> gpu
-            out = sample_(z, x)
-            psamp = stack_ims(out) |> plot_digit
-            log_image(lg, "sampling_$(epoch)", psamp)
-            display(psamp)
-
-            inds = sample(1:args[:bsz], 6, replace=false)
-            p = plot_recs(sample_loader(trans_loader), inds)
-            display(p)
-            log_image(lg, "full_data_recs_$(epoch)", p)
-
-        end
-
-        Lval = test_model(test_loader)
-        log_value(lg, "Val loss", Lval)
-        @info "Val loss: $Lval"
-        if epoch % 50 == 0
-            save_model((Hx, Ha, Encoder), joinpath(save_folder, alias, savename(args) * "_$(epoch)eps"))
-        end
-        push!(Ls, ls)
-    end
+function get_loop(x; args=args, level=args[:n_levels])
+    r = gpu(rand(args[:D], args[:π], args[:bsz]))
+    μ, logvar = Encoder(x)
+    z = sample_z(μ, logvar, r)
+    out = RNP_decoder(z, x, level)
+    return out |> cpu
 end
