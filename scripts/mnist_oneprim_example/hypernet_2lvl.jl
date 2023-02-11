@@ -311,7 +311,7 @@ end
 
 ## =====
 
-eights = test_digits[:, :, test_labels.==0][:, :, 1:args[:bsz]] |> gpu
+eights = test_digits[:, :, test_labels.==8][:, :, 1:args[:bsz]] |> gpu
 
 recs, small_patches, patches, trans_patches, as, patches_t = get_loop_patches(eights)
 
@@ -341,8 +341,8 @@ begin
 end
 
 begin
-    batchind = 4
-    digit_label = "nine_1"
+    batchind = 2
+    digit_label = "eight_1"
     eight_1 = imresize(view_patches_rgb(trans_patches, batchind), (50, 50))
     save("plots/oneprim_eights/$(digit_label).png", eight_1)
 
