@@ -38,11 +38,20 @@ args[:imzprod] = prod(args[:img_size])
 
 ## =====
 
-device!(1)
+device!(0)
 
 dev = gpu
 
 ##=====
+
+
+train_digits, train_labels = Omniglot(; split=:train)[:]
+test_digits, test_labels = Omniglot(; split=:test)[:]
+
+train_digits = imresize(train_digits, (28, 28))
+a = (1.0f0 .- train_digits[:, :, 2])
+using ImageTransformations
+center(a)
 
 all_chars = load("../Recur_generative/data/exp_pro/omniglot_train.jld2")
 xs = shuffle(vcat((all_chars[key] for key in keys(all_chars))...))
@@ -112,7 +121,7 @@ end
 
 
 ## =====
-args[:π] = 64
+args[:π] = 32
 args[:D] = Normal(0.0f0, 1.0f0)
 
 mEnc_za_z = Chain(
@@ -223,8 +232,8 @@ alias = "omni_2lvl"
 save_dir = get_save_dir(save_folder, alias)
 
 ## =====
-args[:seqlen] = 5
-args[:scale_offset] = 2.2f0
+args[:seqlen] = 3
+args[:scale_offset] = 1.8f0
 args[:λ] = 1.0f-6
 args[:λpatch] = 0.0f0
 args[:D] = Normal(0.0f0, 1.0f0)

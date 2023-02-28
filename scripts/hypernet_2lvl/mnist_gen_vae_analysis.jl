@@ -20,7 +20,7 @@ args = Dict(:bsz => 64,
     :π => 64, # latent dim size
     :img_channels => 1,
     :esz => 32, # RNN input size
-    :ha_sz => 32, # policy RNN hidden size
+    :ha_sz => 32, # policy RNN hidden size 
     :α => 1.0f0,
     :β => 0.1f0,
     :add_offset => true,
@@ -95,13 +95,15 @@ function stack_ims(xs; n=8)
 end
 
 ## ======
-args[:π] = 16
+args[:π] = 32
 # modelpath = "saved_models/hypernet_2lvl/mnist_2lvl/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.1_η=0.0001_λ=1e-6_λpatch=0.0_π=16_200eps.bson"
 
 # modelpath = "saved_models/hypernet_2lvl/mnist_2lvl_inc_λpatch/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.5_η=0.0001_λ=1e-6_λpatch=0.04_π=16_100eps.bson"
 
-modelpath = "saved_models/hypernet_2lvl/mnist_2lvl_inc_λpatch/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.5_η=0.0001_λ=1e-6_λpatch=0.08_π=16_200eps.bson"
+# modelpath = "saved_models/hypernet_2lvl/mnist_2lvl_inc_λpatch/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.5_η=0.0001_λ=1e-6_λpatch=0.08_π=16_200eps.bson"
 
+
+modelpath = "saved_models/hypernet_2lvl_larger_za_z_enc/mnist_2lvl/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.0_seqlen=3_α=1.0_β=0.1_η=0.0001_λ=1e-6_λpatch=0.049_π=32_200eps.bson"
 
 l_enc_za_z = (args[:π] + args[:asz]) * args[:esz] # encoder (z_t, a_t) -> z_t+1
 l_fx = get_rnn_θ_sizes(args[:esz], args[:π]) # μ, logvar
@@ -124,14 +126,9 @@ Ha_bounds = [l_enc_za_a; l_fa; l_dec_a]
 
 Hx, Ha, Encoder = load(modelpath)[:model] |> gpu
 
-model_args_dict = parse_savename(
-    "sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.5_η=0.0001_λ=1e-6_λpatch=0.08_π=16"
-)
 
-args = update_args_dict(model_args_dict, args)
-
-args[:seqlen] = 4
-args[:scale_offset] = 2.4f0
+args[:seqlen] = 3
+args[:scale_offset] = 2.0f0
 ## ======
 x = first(test_loader)
 inds = sample(1:args[:bsz], 6; replace=false)
@@ -281,7 +278,7 @@ begin
             grid=false,
         )
     end
-    savefig(p, "plots/mnist_tsne/cluster_and_ims_reference.png")
+    # savefig(p, "plots/mnist_tsne/cluster_and_ims_reference.png")
     p
 end
 ## =====
@@ -297,7 +294,7 @@ begin
         # xlabel="Dimension 1",
         # ylabel="Dimension 2",
     )
- 
+
     for i in 1:n_clusters
         scatter!(Ys[inds.==i, 1], Ys[inds.==i, 2], c=i)
         # scatter!(Ys[inds.==i, 1], Ys[inds.==i, 2], c=i)
