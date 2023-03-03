@@ -332,7 +332,7 @@ save_dir = get_save_dir(save_folder, alias)
 
 ## =====
 args[:seqlen] = 3
-args[:scale_offset] = 1.2f0
+args[:scale_offset] = 1.4f0
 args[:λ] = 1.0f-6
 args[:λpatch] = 0.0f0
 args[:D] = Normal(0.0f0, 1.0f0)

@@ -194,9 +194,9 @@ function plot_rec(out, x, ind; kwargs...)
     return plot(p1, p2, kwargs...)
 end
 
-function plot_rec(out, x, xs, ind)
-    out_ = reshape(cpu(out), 28, 28, :)
-    x_ = reshape(cpu(x), 28, 28, :)
+function plot_rec(out, x, xs, ind; args=args)
+    out_ = reshape(cpu(out), args[:img_size]..., :)
+    x_ = reshape(cpu(x), args[:img_size]..., :)
     p1 = plot_digit(out_[:, :, ind])
     p2 = plot_digit(x_[:, :, ind])
     p3 = plot([plot_digit(x[:, :, 1, ind]; boundc=false) for x in xs]...)
@@ -207,7 +207,7 @@ function plot_recs(x, inds; plot_seq=true, args=args)
     full_recs, patches, xys, patches_t = get_loop(x)
     p = if plot_seq
         let
-            patches_ = map(x -> reshape(x, 28, 28, 1, size(x)[end]), patches)
+            patches_ = map(x -> reshape(x, args[:img_size]..., 1, size(x)[end]), patches)
             [plot_rec(full_recs[end], x, patches_, ind) for ind in inds]
         end
     else

@@ -96,8 +96,6 @@ end
 
 # curve_primitive = load("saved_models/two_primitive_comparison/curve_primitives/curve1.jld2")["curve_patch"]
 
-line_primitive = get_diag_bar(args) |> flatten
-const dec_filters = line_primitive[:, 1:1] |> gpu
 ## ==========
 
 function get_fstate_models(θs, Hx_bounds; args=args, fz=args[:f_z])
@@ -113,7 +111,7 @@ function get_fstate_models(θs, Hx_bounds; args=args, fz=args[:f_z])
     Dec_z_x̂ = Chain(
         HyDense(args[:π], 64, Θ[3], elu),
         flatten,
-        HyDense(64, 1, Θ[4], relu),
+        HyDense(64, args[:imzprod], Θ[4], relu),
         flatten)
 
     z0 = fz.(Θ[5])
@@ -143,8 +141,7 @@ function forward_pass(z1, a1, models, x; scale_offset=args[:scale_offset])
     z1 = f_state(ez)
     a1 = Dec_z_a(f_policy(ea))
 
-    x̂_ = Dec_z_x̂(z1)
-    x̂ = relu.(dec_filters * x̂_)
+    x̂ = Dec_z_x̂(z1)
     patch_t = flatten(zoom_in2d(x, a1, sampling_grid; scale_offset=scale_offset))
 
     return z1, a1, x̂, patch_t
@@ -239,11 +236,12 @@ args[:π] = 16
 args[:D] = Normal(0.0f0, 1.0f0)
 
 l_enc_za_z = (args[:π] + args[:asz]) * args[:esz] # encoder (z_t, a_t) -> z_t+1
-l_fx = get_rnn_θ_sizes(args[:esz], args[:π]) # μ, logvar
+l_fx = get_rnn_θ_sizes(args[:esz], args[:π])
+
 mdec = Chain(
     HyDense(args[:π], 64, args[:bsz], elu),
     flatten,
-    HyDense(64, 1, args[:bsz], relu),
+    HyDense(64, args[:imzprod], args[:bsz], relu),
     flatten,
 )
 
@@ -326,13 +324,13 @@ let
 end
 
 ## =====
-save_folder = "one_primitive_Lsystems"
-alias = "try0"
+save_folder = "Lsystems"
+alias = "2lvl_hyper_try0"
 save_dir = get_save_dir(save_folder, alias)
 
 ## =====
 args[:seqlen] = 3
-args[:scale_offset] = 1.2f0
+args[:scale_offset] = 1.8f0
 args[:λ] = 1.0f-6
 args[:λpatch] = 0.0f0
 args[:D] = Normal(0.0f0, 1.0f0)
@@ -352,7 +350,7 @@ begin
     Ls, RLs, KLs, TLs = [], [], [], []
     for epoch in 1:500
         if epoch % 25 == 0
-            opt.eta = 0.67 * opt.eta
+            opt.eta = 0.8 * opt.eta
             log_value(lg, "learning_rate", opt.eta)
         end
 
