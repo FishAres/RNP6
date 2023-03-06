@@ -54,7 +54,8 @@ end
 parsed_args = parse_commandline()
 device_id = parsed_args["device_id"]
 
-device!(device_id)
+# device!(device_id)
+device!(1)
 
 dev = gpu
 
@@ -112,10 +113,12 @@ function get_fstate_models(θs, Hx_bounds; args=args, fz=args[:f_z])
     Dec_z_x̂ = Chain(
         HyDense(args[:π], 64, Θ[3], elu),
         flatten,
-        HyDense(64, args[:imzprod], Θ[4], relu),
-        flatten)
+        HyDense(64, 64, Θ[4], elu),
+        flatten,
+        HyDense(64, args[:imzprod], Θ[5], relu),
+    )
 
-    z0 = fz.(Θ[5])
+    z0 = fz.(Θ[6])
 
     return (Enc_za_z, f_state, Dec_z_x̂), z0
 end
@@ -242,8 +245,9 @@ l_fx = get_rnn_θ_sizes(args[:esz], args[:π])
 mdec = Chain(
     HyDense(args[:π], 64, args[:bsz], elu),
     flatten,
-    HyDense(64, args[:imzprod], args[:bsz], relu),
+    HyDense(64, 64, args[:bsz], elu),
     flatten,
+    HyDense(64, args[:imzprod], args[:bsz], relu),
 )
 
 l_dec_x = get_param_sizes(mdec)
@@ -326,7 +330,7 @@ end
 
 ## =====
 save_folder = "Lsystems"
-alias = "2lvl_hyper_try0"
+alias = "2lvl_hyper_try0_larger"
 save_dir = get_save_dir(save_folder, alias)
 
 ## =====
