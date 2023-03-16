@@ -54,14 +54,14 @@ end
 parsed_args = parse_commandline()
 device_id = parsed_args["device_id"]
 
-device!(device_id)
+device!(1)
 
 dev = gpu
 
 ##=====
 
 # im_array = load(datadir("exp_pro/Lsystems_1"))["im_array"]
-im_array = load(datadir("exp_pro/Lsystem_array_3.jld2"))["img_array"]
+im_array = load(datadir("exp_pro/Lsystem_array_2lvl_1.jld2"))["img_array"]
 
 frac_train = 0.9
 n_train = trunc(Int, frac_train * size(im_array, 3))
@@ -256,135 +256,20 @@ l_dec_a = args[:asz] * args[:π] + args[:asz] # decoder z -> a, with bias
 
 Ha_bounds = [l_enc_za_a; l_fa; l_dec_a]
 
-Hx = Chain(LayerNorm(args[:π]),
-    Dense(args[:π], 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, sum(Hx_bounds) + args[:π], bias=false),
-) |> gpu
-
-Ha = Chain(LayerNorm(args[:π]),
-    Dense(args[:π], 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, sum(Ha_bounds) + args[:asz]; bias=false)
-) |> gpu
-
-# init_hyper!(Hx)
-# init_hyper!(Ha)
-
-Encoder = gpu(let
-    enc1 = Chain(x -> reshape(x, args[:img_size]..., args[:img_channels], :),
-        Conv((5, 5), args[:img_channels] => 32),
-        BatchNorm(32, relu),
-        Conv((5, 5), 32 => 32),
-        BatchNorm(32, relu),
-        Conv((5, 5), 32 => 32),
-        BatchNorm(32, relu),
-        Conv((5, 5), 32 => 32),
-        BatchNorm(32, relu),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        flatten)
-    outsz = Flux.outputsize(enc1,
-        (args[:img_size]..., args[:img_channels],
-            args[:bsz]))
-    Chain(enc1,
-        Dense(outsz[1], 64),
-        LayerNorm(64, elu),
-        Dense(64, 64),
-        LayerNorm(64, elu),
-        Dense(64, 64),
-        LayerNorm(64, elu),
-        Dense(64, 64),
-        LayerNorm(64, elu),
-        Split(Dense(64, args[:π]), Dense(64, args[:π])))
-end)
-
-nps = sum([prod(size(p)) for p in Flux.params(Hx, Ha)])
-ps = Flux.params(Hx, Ha, Encoder)
 ## =====
+using MLUtils
+modelpath = "saved_models/Lsystems/2lvl_hyper_2lvl_system/add_offset=true_asz=6_bsz=64_esz=32_ha_sz=32_img_channels=1_imzprod=2500_model_ind=0_scale_offset=2.4_seqlen=3_α=1.0_β=0.5_η=0.0001_λ=1e-6_λpatch=0.054_π=16_100eps.bson"
 
-x = first(test_loader)
-let
-    inds = sample(1:args[:bsz], 6; replace=false)
-    p = plot_recs(x, inds)
-    display(p)
-end
+Hx, Ha, Encoder = load(modelpath)[:model] |> gpu
 
-## =====
-save_folder = "Lsystems"
-alias = "2lvl_hyper_try0"
-save_dir = get_save_dir(save_folder, alias)
 
-## =====
 args[:seqlen] = 3
-args[:scale_offset] = 1.8f0
-args[:λ] = 1.0f-6
-args[:λpatch] = 0.0f0
-args[:D] = Normal(0.0f0, 1.0f0)
+args[:scale_offset] = 2.4f0
 
-args[:α] = 1.0f0
-args[:β] = 0.5f0
 
-args[:η] = 1e-4
-args[:model_ind] = Symbol(parsed_args["model_ind"])
-
-opt = ADAM(args[:η])
-lg = new_logger(joinpath(save_folder, alias), args)
-log_value(lg, "learning_rate", opt.eta)
-log_value(lg, "lambda_patch", args[:λpatch])
 ## ====
+x = first(test_loader)
 begin
-    # Ls, RLs, KLs, TLs = [], [], [], []
-    for epoch in 55:500
-        if epoch % 50 == 0
-            opt.eta = 0.9 * opt.eta
-            log_value(lg, "learning_rate", opt.eta)
-
-        end
-
-        ls, rec_losses, klqps = train_model(opt, ps, train_loader; epoch=epoch, logger=lg)
-        inds = sample(1:args[:bsz], 6, replace=false)
-        p = plot_recs(sample_loader(test_loader), inds)
-        display(p)
-        log_image(lg, "recs_$(epoch)", p)
-
-        if epoch % 5 == 0
-            z = randn(Float32, args[:π], args[:bsz]) |> gpu
-            out = sample_(z, x)
-            out, out_x̂ = sample_levels(z, x)
-            psamp_out = plot_digit(stack_ims(out), title="2 level")
-            psamp_x̂ = plot_digit(stack_ims(out_x̂), title="1 level")
-            psamp = plot(psamp_out, psamp_x̂)
-            log_image(lg, "sampling_$(epoch)", psamp)
-            display(psamp)
-
-            args[:λpatch] = min(args[:λpatch] + 4.0f-3, 1.0f-1)
-            log_value(lg, "lambda_patch", args[:λpatch])
-        end
-
-        Lval = test_model(test_loader)
-        log_value(lg, "test loss", Lval)
-        @info "Test loss: $Lval"
-        if epoch % 100 == 0
-            save_model((Hx, Ha, Encoder), joinpath(save_folder, alias, savename(args) * "_$(epoch)eps"))
-        end
-        push!(Ls, ls)
-        push!(RLs, rec_losses)
-        push!(KLs, klqps)
-        push!(TLs, Lval)
-    end
+    z = randn(Float32, args[:π], args[:bsz]) |> gpu
+    stack_ims(sample_(z, x)[:, :, :, 1:16], n=4) |> plot_digit
 end

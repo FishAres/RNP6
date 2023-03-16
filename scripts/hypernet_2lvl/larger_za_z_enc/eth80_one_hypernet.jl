@@ -38,7 +38,7 @@ args[:imzprod] = prod(args[:img_size])
 
 ## =====
 
-device!(0)
+device!(1)
 
 dev = gpu
 
@@ -95,9 +95,70 @@ function get_fstate_models(θs, Hx_bounds; args=args, fz=args[:f_z])
     return (Enc_za_z, f_state, Dec_z_x̂), z0
 end
 
+function get_models(z; args=args)
+    θsz, θsa = Hx(z)
+    models, z0, a0 = get_models(θsz, θsa; args=args)
+    return models, z0, a0
+end
+
+
+function model_loss(x, r; args=args)
+    μ, logvar = Encoder(x)
+    z = sample_z(μ, logvar, r)
+    θsz, θsa = Hx(z)
+    models, z0, a0 = get_models(θsz, θsa; args=args)
+    z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=args[:scale_offset])
+    out_small = full_sequence(z1, patch_t)
+    out = sample_patch(out_small, a1, sampling_grid)
+    Lpatch = Flux.mse(flatten(x̂), flatten(patch_t); agg=sum)
+    for t in 2:args[:seqlen]
+        z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x;
+            scale_offset=args[:scale_offset])
+        out_small = full_sequence(z1, patch_t)
+        out += sample_patch(out_small, a1, sampling_grid)
+        Lpatch += Flux.mse(flatten(x̂), flatten(patch_t); agg=sum)
+    end
+    klqp = kl_loss(μ, logvar)
+    rec_loss = Flux.mse(flatten(out), flatten(x); agg=sum)
+    return rec_loss + args[:λpatch] * Lpatch, klqp
+end
+
+Zygote.@nograd function push_to_arrays!(outputs, arrays)
+    for (output, array) in zip(outputs, arrays)
+        push!(array, cpu(output))
+    end
+end
+
+function full_sequence(z::AbstractArray, x; args=args, scale_offset=args[:scale_offset])
+    θsz, θsa = Hx(z)
+    models, z0, a0 = get_models(θsz, θsa; args=args)
+    return full_sequence(models, z0, a0, x; args=args, scale_offset=scale_offset)
+end
+
+"output sequence: full recs, local recs, xys (a1), patches_t"
+function get_loop(x; args=args)
+    outputs = patches, recs, as, patches_t = [], [], [], [], []
+    r = gpu(rand(args[:D], args[:π], args[:bsz]))
+    μ, logvar = Encoder(x)
+    z = sample_z(μ, logvar, r)
+    θsz, θsa = Hx(z)
+    models, z0, a0 = get_models(θsz, θsa; args=args)
+    z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=args[:scale_offset])
+    out_small = full_sequence(z1, patch_t)
+    out = sample_patch(out_small, a1, sampling_grid)
+    push_to_arrays!((out, out_small, a1, patch_t), outputs)
+    for t in 2:args[:seqlen]
+        z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x;
+            scale_offset=args[:scale_offset])
+        out_small = full_sequence(z1, patch_t)
+        out += sample_patch(out_small, a1, sampling_grid)
+        push_to_arrays!((out, out_small, a1, patch_t), outputs)
+    end
+    return outputs
+end
+
 function sample_(z, x; args=args)
-    θsz = Hx(z)
-    θsa = Ha(z)
+    θsz, θsa = Hx(z)
     models, z0, a0 = get_models(θsz, θsa; args=args)
     z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=args[:scale_offset])
     out_small = full_sequence(z1, patch_t)
@@ -147,10 +208,32 @@ function plot_recs(x, inds; plot_seq=true, args=args)
     return plot(p...; layout=(length(inds), 1), size=(600, 800))
 end
 
+function train_model(opt, ps, train_data; args=args, epoch=1, logger=nothing, D=args[:D], clip_grads=false)
+    progress_tracker = Progress(length(train_data), 1, "Training epoch $epoch :)")
+    losses = zeros(length(train_data))
+    # initial z's drawn from N(0,1)
+    rs = gpu([rand(D, args[:π], args[:bsz]) for _ in 1:length(train_data)])
+    for (i, x) in enumerate(train_data)
+        loss, grad = withgradient(ps) do
+            rec_loss, klqp = model_loss(x, rs[i])
+            logger !== nothing && Zygote.ignore() do
+                log_value(lg, "rec_loss", rec_loss)
+                return log_value(lg, "KL loss", klqp)
+            end
+            full_loss = args[:α] * rec_loss + args[:β] * klqp
+            return full_loss + args[:λ] * norm(Flux.params(Hx))
+        end
+        clip_grads && foreach(x -> clamp!(x, -0.1f0, 0.1f0), grad)
+        Flux.update!(opt, ps, grad)
+        losses[i] = loss
+        ProgressMeter.next!(progress_tracker; showvalues=[(:loss, loss)])
+    end
+    return losses
+end
 
 
 ## =====
-args[:π] = 16
+args[:π] = 32
 args[:D] = Normal(0.0f0, 1.0f0)
 
 mEnc_za_z = Chain(
@@ -199,21 +282,12 @@ Hx = Chain(LayerNorm(args[:π]),
     LayerNorm(64, elu),
     Dense(64, 64),
     LayerNorm(64, elu),
-    Dense(64, sum(Hx_bounds) + args[:π], bias=false),
+    Split(
+        Dense(64, sum(Hx_bounds) + args[:π], bias=false),
+        Dense(64, sum(Ha_bounds) + args[:asz], bias=false),
+    )
 ) |> gpu
 
-Ha = Chain(LayerNorm(args[:π]),
-    Dense(args[:π], 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, sum(Ha_bounds) + args[:asz]; bias=false)
-) |> gpu
-
-# init_hyper!(Hx)
-# init_hyper!(Ha)
 
 Encoder = gpu(let
     enc1 = Chain(x -> reshape(x, args[:img_size]..., args[:img_channels], :),
@@ -248,7 +322,7 @@ Encoder = gpu(let
         Split(Dense(64, args[:π]), Dense(64, args[:π])))
 end)
 
-ps = Flux.params(Hx, Ha, Encoder)
+ps = Flux.params(Hx, Encoder)
 
 ## ====
 
@@ -262,7 +336,7 @@ end
 
 ## =====
 save_folder = "hypernet_2lvl_larger_za_z_enc"
-alias = "eth80_2lvl"
+alias = "eth80_2lvl_one_hypernet"
 save_dir = get_save_dir(save_folder, alias)
 
 ## =====
@@ -311,13 +385,12 @@ begin
         log_value(lg, "test loss", Lval)
         @info "Test loss: $Lval"
         if epoch % 50 == 0
-            save_model((Hx, Ha, Encoder), joinpath(save_folder, alias, savename(args) * "_$(epoch)eps"))
+            save_model((Hx, Encoder), joinpath(save_folder, alias, savename(args) * "_$(epoch)eps"))
         end
         push!(Ls, ls)
     end
 end
 ## =====
-
 begin
     z = randn(Float32, args[:π], args[:bsz]) |> gpu
     out = sample_(z, x)[:, :, :, 1:16]

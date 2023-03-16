@@ -10,7 +10,7 @@ using Flux.Data: DataLoader
 using Distributions
 using StatsBase: sample
 using Random: shuffle
-
+using MLUtils
 include(srcdir("gen_vae_utils_larger.jl"))
 
 CUDA.allowscalar(false)
@@ -150,7 +150,7 @@ end
 
 
 ## =====
-args[:π] = 16
+args[:π] = 32
 args[:D] = Normal(0.0f0, 1.0f0)
 
 mEnc_za_z = Chain(
@@ -190,134 +190,17 @@ l_dec_a = args[:asz] * args[:π] + args[:asz] # decoder z -> a, with bias
 
 Ha_bounds = [l_enc_za_a...; l_fa; l_dec_a]
 
-Hx = Chain(LayerNorm(args[:π]),
-    Dense(args[:π], 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, sum(Hx_bounds) + args[:π], bias=false),
-) |> gpu
+## ======
 
-Ha = Chain(LayerNorm(args[:π]),
-    Dense(args[:π], 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, 64),
-    LayerNorm(64, elu),
-    Dense(64, sum(Ha_bounds) + args[:asz]; bias=false)
-) |> gpu
+modelpath = "saved_models/hypernet_2lvl_larger_za_z_enc/eth80_2lvl/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=3_imzprod=2500_scale_offset=2.4_seqlen=4_α=1.0_β=0.1_η=0.0001_λ=1e-6_λpatch=0.049_π=32_200eps.bson"
 
-# init_hyper!(Hx)
-# init_hyper!(Ha)
-
-Encoder = gpu(let
-    enc1 = Chain(x -> reshape(x, args[:img_size]..., args[:img_channels], :),
-        Conv((5, 5), args[:img_channels] => 32),
-        BatchNorm(32, relu),
-        Conv((5, 5), 32 => 32),
-        BatchNorm(32, relu),
-        Conv((5, 5), 32 => 32),
-        BatchNorm(32, relu),
-        Conv((5, 5), 32 => 32),
-        BatchNorm(32, relu),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        BasicBlock(32 => 32, +),
-        flatten)
-    outsz = Flux.outputsize(enc1,
-        (args[:img_size]..., args[:img_channels],
-            args[:bsz]))
-    Chain(enc1,
-        Dense(outsz[1], 64),
-        LayerNorm(64, elu),
-        Dense(64, 64),
-        LayerNorm(64, elu),
-        Dense(64, 64),
-        LayerNorm(64, elu),
-        Dense(64, 64),
-        LayerNorm(64, elu),
-        Split(Dense(64, args[:π]), Dense(64, args[:π])))
-end)
-
-ps = Flux.params(Hx, Ha, Encoder)
-
-## ====
-
-x = first(test_loader)
-inds = sample(1:args[:bsz], 6; replace=false)
-let
-    p = plot_recs(x, inds)
-    display(p)
-end
-
-
-## =====
-save_folder = "hypernet_2lvl_larger_za_z_enc"
-alias = "eth80_2lvl"
-save_dir = get_save_dir(save_folder, alias)
+Hx, Ha, Encoder = load(modelpath)[:model] |> gpu
 
 ## =====
 args[:seqlen] = 4
-args[:scale_offset] = 2.0f0
-args[:λ] = 1.0f-6
-args[:λpatch] = 0.0f0
-args[:D] = Normal(0.0f0, 1.0f0)
+args[:scale_offset] = 2.4f0
 
-args[:α] = 1.0f0
-args[:β] = 0.1f0
-
-args[:η] = 1e-4
-
-opt = ADAM(args[:η])
-lg = new_logger(joinpath(save_folder, alias), args)
-log_value(lg, "learning_rate", opt.eta)
-## ====
-begin
-    Ls = []
-    for epoch in 1:600
-        if epoch % 50 == 0
-            opt.eta = 0.67 * opt.eta
-            log_value(lg, "learning_rate", opt.eta)
-        end
-        if epoch % 10 == 0
-            args[:λpatch] = max(args[:λpatch] + 1.0f-4, 1.0f-3)
-            log_value(lg, "λpatch", args[:λpatch])
-        end
-
-        ls = train_model(opt, ps, train_loader; epoch=epoch, logger=lg)
-        inds = sample(1:args[:bsz], 6, replace=false)
-        p = plot_recs(sample_loader(test_loader), inds)
-        display(p)
-        log_image(lg, "recs_$(epoch)", p)
-
-        if epoch % 5 == 0
-            z = randn(Float32, args[:π], args[:bsz]) |> gpu
-            out = sample_(z, x)[:, :, :, 1:16]
-            psamp = stack_ims(out) |> imview_cifar |> x -> imresize(x, (400, 400)) |> plot
-            log_image(lg, "sampling_$(epoch)", psamp)
-            display(psamp)
-        end
-
-        Lval = test_model(test_loader)
-        log_value(lg, "test loss", Lval)
-        @info "Test loss: $Lval"
-        if epoch % 50 == 0
-            save_model((Hx, Ha, Encoder), joinpath(save_folder, alias, savename(args) * "_$(epoch)eps"))
-        end
-        push!(Ls, ls)
-    end
-end
-## =====
-
+x = first(test_loader)
 begin
     z = randn(Float32, args[:π], args[:bsz]) |> gpu
     out = sample_(z, x)[:, :, :, 1:16]

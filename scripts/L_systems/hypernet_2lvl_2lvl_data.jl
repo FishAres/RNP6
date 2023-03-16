@@ -54,14 +54,14 @@ end
 parsed_args = parse_commandline()
 device_id = parsed_args["device_id"]
 
-device!(device_id)
+device!(1)
 
 dev = gpu
 
 ##=====
 
 # im_array = load(datadir("exp_pro/Lsystems_1"))["im_array"]
-im_array = load(datadir("exp_pro/Lsystem_array_3.jld2"))["img_array"]
+im_array = load(datadir("exp_pro/Lsystem_array_2lvl_1.jld2"))["img_array"]
 
 frac_train = 0.9
 n_train = trunc(Int, frac_train * size(im_array, 3))
@@ -326,18 +326,18 @@ end
 
 ## =====
 save_folder = "Lsystems"
-alias = "2lvl_hyper_try0"
+alias = "2lvl_hyper_2lvl_system"
 save_dir = get_save_dir(save_folder, alias)
 
 ## =====
 args[:seqlen] = 3
-args[:scale_offset] = 1.8f0
+args[:scale_offset] = 2.4f0
 args[:λ] = 1.0f-6
 args[:λpatch] = 0.0f0
 args[:D] = Normal(0.0f0, 1.0f0)
 
 args[:α] = 1.0f0
-args[:β] = 0.5f0
+args[:β] = 0.25f0
 
 args[:η] = 1e-4
 args[:model_ind] = Symbol(parsed_args["model_ind"])
@@ -348,11 +348,14 @@ log_value(lg, "learning_rate", opt.eta)
 log_value(lg, "lambda_patch", args[:λpatch])
 ## ====
 begin
-    # Ls, RLs, KLs, TLs = [], [], [], []
-    for epoch in 55:500
-        if epoch % 50 == 0
+    Ls, RLs, KLs, TLs = [], [], [], []
+    for epoch in 1:500
+        if epoch % 25 == 0
             opt.eta = 0.9 * opt.eta
             log_value(lg, "learning_rate", opt.eta)
+
+            args[:λpatch] = min(args[:λpatch] + 1.0f-2, 1.0f-1)
+            log_value(lg, "lambda_patch", args[:λpatch])
 
         end
 
@@ -371,10 +374,8 @@ begin
             psamp = plot(psamp_out, psamp_x̂)
             log_image(lg, "sampling_$(epoch)", psamp)
             display(psamp)
-
-            args[:λpatch] = min(args[:λpatch] + 4.0f-3, 1.0f-1)
-            log_value(lg, "lambda_patch", args[:λpatch])
         end
+
 
         Lval = test_model(test_loader)
         log_value(lg, "test loss", Lval)
@@ -388,3 +389,4 @@ begin
         push!(TLs, Lval)
     end
 end
+
