@@ -54,15 +54,15 @@ end
 parsed_args = parse_commandline()
 device_id = parsed_args["device_id"]
 
-# device!(device_id)
-device!(1)
+device!(device_id)
 
 dev = gpu
 
 ##=====
 
 # im_array = load(datadir("exp_pro/Lsystems_1"))["im_array"]
-im_array = load(datadir("exp_pro/Lsystem_array_2.jld2"))["img_array"]
+# im_array = load(datadir("exp_pro/Lsystem_array_3.jld2"))["img_array"]
+im_array = load(datadir("exp_pro/Lsystem_array_2lvl_thicker_2.jld2"))["img_array"]
 
 frac_train = 0.9
 n_train = trunc(Int, frac_train * size(im_array, 3))
@@ -113,12 +113,10 @@ function get_fstate_models(θs, Hx_bounds; args=args, fz=args[:f_z])
     Dec_z_x̂ = Chain(
         HyDense(args[:π], 64, Θ[3], elu),
         flatten,
-        HyDense(64, 64, Θ[4], elu),
-        flatten,
-        HyDense(64, args[:imzprod], Θ[5], relu),
-    )
+        HyDense(64, args[:imzprod], Θ[4], relu),
+        flatten)
 
-    z0 = fz.(Θ[6])
+    z0 = fz.(Θ[5])
 
     return (Enc_za_z, f_state, Dec_z_x̂), z0
 end
@@ -162,7 +160,7 @@ function sample_(z, x; args=args)
         z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x;
             scale_offset=args[:scale_offset])
         out_small = full_sequence(z1, patch_t)
-        out += sample_patch(out_small, a1, sampling_grid)
+        out = min.(out + sample_patch(out_small, a1, sampling_grid), 1.0f0)
     end
     return out |> cpu
 end
@@ -233,6 +231,66 @@ function train_model(opt, ps, train_data; args=args, epoch=1, logger=nothing, D=
     return losses, RLs, KLs
 end
 
+"threshold part addition to add up to 1"
+function full_sequence(models::Tuple, z0, a0, x; args=args,
+    scale_offset=args[:scale_offset])
+    f_state, f_policy, Enc_za_z, Enc_za_a, Dec_z_x̂, Dec_z_a = models
+    z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=scale_offset)
+    out = sample_patch(x̂, a1, sampling_grid)
+    for t in 2:args[:seqlen]
+        z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x; scale_offset=scale_offset)
+        out = min.(out + sample_patch(x̂, a1, sampling_grid), 1.0f0)
+    end
+    return out
+end
+
+
+"threshold part addition to add up to 1"
+function model_loss(x, r; args=args)
+    μ, logvar = Encoder(x)
+    z = sample_z(μ, logvar, r)
+    θsz = Hx(z)
+    θsa = Ha(z)
+    models, z0, a0 = get_models(θsz, θsa; args=args)
+    z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=args[:scale_offset])
+    out_small = full_sequence(z1, patch_t)
+    out = sample_patch(out_small, a1, sampling_grid)
+    Lpatch = Flux.mse(flatten(x̂), flatten(patch_t); agg=sum)
+    for t in 2:args[:seqlen]
+        z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x;
+            scale_offset=args[:scale_offset])
+        out_small = full_sequence(z1, patch_t)
+        out = min.(out + sample_patch(out_small, a1, sampling_grid), 1.0f0)
+        Lpatch += Flux.mse(flatten(x̂), flatten(patch_t); agg=sum)
+    end
+    klqp = kl_loss(μ, logvar)
+    rec_loss = Flux.mse(flatten(out), flatten(x); agg=sum)
+    return rec_loss + args[:λpatch] * Lpatch, klqp
+end
+
+function get_loop(x; args=args)
+    outputs = patches, recs, as, patches_t = [], [], [], [], []
+    r = gpu(rand(args[:D], args[:π], args[:bsz]))
+    μ, logvar = Encoder(x)
+    z = sample_z(μ, logvar, r)
+    θsz = Hx(z)
+    θsa = Ha(z)
+    models, z0, a0 = get_models(θsz, θsa; args=args)
+    z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=args[:scale_offset])
+    out_small = full_sequence(z1, patch_t)
+    out = sample_patch(out_small, a1, sampling_grid)
+    push_to_arrays!((out, out_small, a1, patch_t), outputs)
+    for t in 2:args[:seqlen]
+        z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x;
+            scale_offset=args[:scale_offset])
+        out_small = full_sequence(z1, patch_t)
+        out = min.(out + sample_patch(out_small, a1, sampling_grid), 1.0f0)
+        push_to_arrays!((out, out_small, a1, patch_t), outputs)
+    end
+    return outputs
+end
+
+
 
 ## ==========
 
@@ -245,9 +303,8 @@ l_fx = get_rnn_θ_sizes(args[:esz], args[:π])
 mdec = Chain(
     HyDense(args[:π], 64, args[:bsz], elu),
     flatten,
-    HyDense(64, 64, args[:bsz], elu),
-    flatten,
     HyDense(64, args[:imzprod], args[:bsz], relu),
+    flatten,
 )
 
 l_dec_x = get_param_sizes(mdec)
@@ -320,8 +377,7 @@ end)
 nps = sum([prod(size(p)) for p in Flux.params(Hx, Ha)])
 ps = Flux.params(Hx, Ha, Encoder)
 ## =====
-
-x = first(test_loader)
+x = sample_loader(test_loader)
 let
     inds = sample(1:args[:bsz], 6; replace=false)
     p = plot_recs(x, inds)
@@ -330,18 +386,18 @@ end
 
 ## =====
 save_folder = "Lsystems"
-alias = "2lvl_hyper_try0_larger"
+alias = "2lvl_hyper_try_thicker_reset"
 save_dir = get_save_dir(save_folder, alias)
 
 ## =====
 args[:seqlen] = 3
-args[:scale_offset] = 1.8f0
+args[:scale_offset] = 2.0f0
 args[:λ] = 1.0f-6
 args[:λpatch] = 0.0f0
 args[:D] = Normal(0.0f0, 1.0f0)
 
 args[:α] = 1.0f0
-args[:β] = 0.1f0
+args[:β] = 0.5f0
 
 args[:η] = 1e-4
 args[:model_ind] = Symbol(parsed_args["model_ind"])
@@ -352,12 +408,10 @@ log_value(lg, "learning_rate", opt.eta)
 log_value(lg, "lambda_patch", args[:λpatch])
 ## ====
 begin
-    Ls, RLs, KLs, TLs = [], [], [], []
     for epoch in 1:500
-        if epoch % 25 == 0
+        if epoch % 50 == 0
             opt.eta = 0.9 * opt.eta
             log_value(lg, "learning_rate", opt.eta)
-
         end
 
         ls, rec_losses, klqps = train_model(opt, ps, train_loader; epoch=epoch, logger=lg)
@@ -376,7 +430,7 @@ begin
             log_image(lg, "sampling_$(epoch)", psamp)
             display(psamp)
 
-            args[:λpatch] = min(args[:λpatch] + 2.0f-3, 1.0f-2)
+            args[:λpatch] = min(args[:λpatch] + 4.0f-3, 1.0f-1)
             log_value(lg, "lambda_patch", args[:λpatch])
         end
 
@@ -386,9 +440,5 @@ begin
         if epoch % 100 == 0
             save_model((Hx, Ha, Encoder), joinpath(save_folder, alias, savename(args) * "_$(epoch)eps"))
         end
-        push!(Ls, ls)
-        push!(RLs, rec_losses)
-        push!(KLs, klqps)
-        push!(TLs, Lval)
     end
 end

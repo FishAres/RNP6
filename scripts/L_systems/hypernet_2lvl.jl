@@ -61,7 +61,8 @@ dev = gpu
 ##=====
 
 # im_array = load(datadir("exp_pro/Lsystems_1"))["im_array"]
-im_array = load(datadir("exp_pro/Lsystem_array_3.jld2"))["img_array"]
+# im_array = load(datadir("exp_pro/Lsystem_array_3.jld2"))["img_array"]
+im_array = load(datadir("exp_pro/Lsystem_array_2lvl_thicker_2.jld2"))["img_array"]
 
 frac_train = 0.9
 n_train = trunc(Int, frac_train * size(im_array, 3))
@@ -316,8 +317,7 @@ end)
 nps = sum([prod(size(p)) for p in Flux.params(Hx, Ha)])
 ps = Flux.params(Hx, Ha, Encoder)
 ## =====
-
-x = first(test_loader)
+x = sample_loader(test_loader)
 let
     inds = sample(1:args[:bsz], 6; replace=false)
     p = plot_recs(x, inds)
@@ -326,12 +326,12 @@ end
 
 ## =====
 save_folder = "Lsystems"
-alias = "2lvl_hyper_try0"
+alias = "2lvl_hyper_try_thicker_reset"
 save_dir = get_save_dir(save_folder, alias)
 
 ## =====
 args[:seqlen] = 3
-args[:scale_offset] = 1.8f0
+args[:scale_offset] = 2.0f0
 args[:λ] = 1.0f-6
 args[:λpatch] = 0.0f0
 args[:D] = Normal(0.0f0, 1.0f0)
@@ -348,12 +348,10 @@ log_value(lg, "learning_rate", opt.eta)
 log_value(lg, "lambda_patch", args[:λpatch])
 ## ====
 begin
-    # Ls, RLs, KLs, TLs = [], [], [], []
-    for epoch in 55:500
+    for epoch in 1:500
         if epoch % 50 == 0
             opt.eta = 0.9 * opt.eta
             log_value(lg, "learning_rate", opt.eta)
-
         end
 
         ls, rec_losses, klqps = train_model(opt, ps, train_loader; epoch=epoch, logger=lg)
@@ -382,9 +380,5 @@ begin
         if epoch % 100 == 0
             save_model((Hx, Ha, Encoder), joinpath(save_folder, alias, savename(args) * "_$(epoch)eps"))
         end
-        push!(Ls, ls)
-        push!(RLs, rec_losses)
-        push!(KLs, klqps)
-        push!(TLs, Lval)
     end
 end
