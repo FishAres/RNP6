@@ -59,7 +59,10 @@ device!(device_id)
 dev = gpu
 
 ##=====
-im_array = load(datadir("exp_pro/Lsystem_array_2lvl_thicker_2.jld2"))["img_array"][:, :, 1:5000]
+
+# im_array = load(datadir("exp_pro/Lsystems_1"))["im_array"]
+# im_array = load(datadir("exp_pro/Lsystem_array_3.jld2"))["img_array"]
+im_array = load(datadir("exp_pro/Lsystem_array_2lvl_thicker_2.jld2"))["img_array"]
 
 frac_train = 0.9
 n_train = trunc(Int, frac_train * size(im_array, 3))
@@ -85,29 +88,6 @@ const diag_mat = dev(cat(diag_vec...; dims=3))
 const diag_off = dev(cat(1.0f-6 .* diag_vec...; dims=3))
 ## ===========
 
-function get_diag_bar(args)
-    canv = zeros(Float32, args[:img_size]..., args[:bsz])
-    for i in 5:24
-        canv[i-4:i+4, i-4:i+4, :] .= 1.0f0
-    end
-    return canv
-end
-
-# curve_primitive = load("saved_models/two_primitive_comparison/curve_primitives/curve1.jld2")["curve_patch"]
-
-line_primitive = get_diag_bar(args) |> flatten
-const dec_filters = line_primitive[:, 1:1] |> gpu
-## ==========
-
-
-@inline function get_affine_mats(thetas; scale_offset=0.0f0)
-    sc = 1.0f0 .* (@view thetas[[1, 4], :]) .+ 1.0f0 .+ scale_offset
-    b = sc .* (@view thetas[5:6, :])
-    A_rot = get_rot_mat(π32 * (@view thetas[2, :]))
-    A_sc = unsqueeze(sc, 2) .* diag_mat
-    A_shear = get_shear_mat(@view thetas[3, :])
-    return A_rot, A_sc, A_shear, b
-end
 
 function get_fstate_models(θs, Hx_bounds; args=args, fz=args[:f_z])
     inds = Zygote.ignore() do
@@ -122,7 +102,7 @@ function get_fstate_models(θs, Hx_bounds; args=args, fz=args[:f_z])
     Dec_z_x̂ = Chain(
         HyDense(args[:π], 64, Θ[3], elu),
         flatten,
-        HyDense(64, 1, Θ[4], relu),
+        HyDense(64, args[:imzprod], Θ[4], relu),
         flatten)
 
     z0 = fz.(Θ[5])
@@ -152,29 +132,15 @@ function forward_pass(z1, a1, models, x; scale_offset=args[:scale_offset])
     z1 = f_state(ez)
     a1 = Dec_z_a(f_policy(ea))
 
-    x̂_ = Dec_z_x̂(z1)
-    x̂ = relu.(dec_filters * x̂_)
+    x̂ = Dec_z_x̂(z1)
     patch_t = flatten(zoom_in2d(x, a1, sampling_grid; scale_offset=scale_offset))
 
     return z1, a1, x̂, patch_t
 end
 
 function sample_(z, x; args=args)
-    θsz = Hx(z)
-    θsa = Ha(z)
-    models, z0, a0 = get_models(θsz, θsa; args=args)
-    z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=args[:scale_offset])
-    out_small = full_sequence(z1, patch_t)
-    out = sample_patch(out_small, a1, sampling_grid)
-    for t in 2:args[:seqlen]
-        z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x;
-            scale_offset=args[:scale_offset])
-        out_small = full_sequence(z1, patch_t)
-        out += sample_patch(out_small, a1, sampling_grid)
-    end
-    return out |> cpu
+    RNP_decoder(z, x, 3)
 end
-
 
 function stack_ims(xs; n=8)
     n = n === nothing ? sqrt(length(xs)) : n
@@ -184,65 +150,43 @@ function stack_ims(xs; n=8)
     return vcat(rows_...)
 end
 
-function sample_levels(z, x; args=args)
+
+function RNP_decoder(z, x, level; args=args)
     θsz = Hx(z)
     θsa = Ha(z)
     models, z0, a0 = get_models(θsz, θsa; args=args)
     z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=args[:scale_offset])
-    out_small = full_sequence(z1, patch_t)
-    out = sample_patch(out_small, a1, sampling_grid)
-    out_x̂ = sample_patch(x̂, a1, sampling_grid)
+    if level > 0
+        out_ = RNP_decoder(z1, patch_t, level - 1)
+        out = sample_patch(out_, a1, sampling_grid)
+    else
+        out = sample_patch(x̂, a1, sampling_grid)
+    end
     for t in 2:args[:seqlen]
         z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x;
             scale_offset=args[:scale_offset])
-        out_small = full_sequence(z1, patch_t)
-        out += sample_patch(out_small, a1, sampling_grid)
-        out_x̂ += sample_patch(x̂, a1, sampling_grid)
-    end
-    return out |> cpu, out_x̂ |> cpu
-end
-
-
-function train_model(opt, ps, train_data; args=args, epoch=1, logger=nothing, D=args[:D])
-    progress_tracker = Progress(length(train_data), 1, "Training epoch $epoch :)")
-    losses = zeros(length(train_data))
-    # initial z's drawn from N(0,1)
-    RLs, KLs = [], []
-    rs = gpu([rand(D, args[:π], args[:bsz]) for _ in 1:length(train_data)])
-    for (i, x) in enumerate(train_data)
-        loss, grad = withgradient(ps) do
-            rec_loss, klqp = model_loss(x, rs[i])
-            logger !== nothing && Zygote.ignore() do
-                log_value(lg, "rec_loss", rec_loss)
-                return log_value(lg, "KL loss", klqp)
-            end
-            Zygote.ignore() do
-                push!(KLs, klqp)
-                push!(RLs, rec_loss)
-            end
-            full_loss = args[:α] * rec_loss + args[:β] * klqp
-            return full_loss + args[:λ] * (norm(Flux.params(Hx)) + norm(Flux.params(Ha)))
+        if level > 0
+            out_ = RNP_decoder(z1, patch_t, level - 1)
+            out += sample_patch(out_, a1, sampling_grid)
+        else
+            out += sample_patch(x̂, a1, sampling_grid)
         end
-        # foreach(x -> clamp!(x, -0.1f0, 0.1f0), grad)
-        Flux.update!(opt, ps, grad)
-        losses[i] = loss
-        ProgressMeter.next!(progress_tracker; showvalues=[(:loss, loss)])
     end
-    return losses, RLs, KLs
+    return out
 end
-
 
 ## ==========
-
+using MLUtils
 args[:π] = 16
 args[:D] = Normal(0.0f0, 1.0f0)
 
 l_enc_za_z = (args[:π] + args[:asz]) * args[:esz] # encoder (z_t, a_t) -> z_t+1
-l_fx = get_rnn_θ_sizes(args[:esz], args[:π]) # μ, logvar
+l_fx = get_rnn_θ_sizes(args[:esz], args[:π])
+
 mdec = Chain(
     HyDense(args[:π], 64, args[:bsz], elu),
     flatten,
-    HyDense(64, 1, args[:bsz], relu),
+    HyDense(64, args[:imzprod], args[:bsz], relu),
     flatten,
 )
 
@@ -255,6 +199,7 @@ l_fa = get_rnn_θ_sizes(args[:esz], args[:π]) # same size for now
 l_dec_a = args[:asz] * args[:π] + args[:asz] # decoder z -> a, with bias
 
 Ha_bounds = [l_enc_za_a; l_fa; l_dec_a]
+
 
 Hx = Chain(LayerNorm(args[:π]),
     Dense(args[:π], 64),
@@ -316,67 +261,9 @@ end)
 nps = sum([prod(size(p)) for p in Flux.params(Hx, Ha)])
 ps = Flux.params(Hx, Ha, Encoder)
 ## =====
-
-x = first(test_loader)
+x = sample_loader(test_loader)
 let
     inds = sample(1:args[:bsz], 6; replace=false)
     p = plot_recs(x, inds)
     display(p)
-end
-## =====
-
-
-save_folder = "one_primitive_Lsystems"
-alias = "try1"
-save_dir = get_save_dir(save_folder, alias)
-
-## =====
-args[:seqlen] = 4
-args[:scale_offset] = 1.6f0
-args[:λ] = 1.0f-6
-args[:λpatch] = 0.0f0
-args[:D] = Normal(0.0f0, 1.0f0)
-
-args[:α] = 1.0f0
-args[:β] = 0.1f0
-
-args[:η] = 1e-4
-args[:model_ind] = Symbol(parsed_args["model_ind"])
-
-opt = ADAM(args[:η])
-lg = new_logger(joinpath(save_folder, alias), args)
-log_value(lg, "learning_rate", opt.eta)
-log_value(lg, "lambda_patch", args[:λpatch])
-## ====
-begin
-    for epoch in 1:500
-        if epoch % 25 == 0
-            opt.eta = 0.67 * opt.eta
-            log_value(lg, "learning_rate", opt.eta)
-        end
-
-        ls, rec_losses, klqps = train_model(opt, ps, train_loader; epoch=epoch, logger=lg)
-        inds = sample(1:args[:bsz], 6, replace=false)
-        p = plot_recs(sample_loader(test_loader), inds)
-        display(p)
-        log_image(lg, "recs_$(epoch)", p)
-
-        if epoch % 5 == 0
-            z = randn(Float32, args[:π], args[:bsz]) |> gpu
-            out = sample_(z, x)
-            out, out_x̂ = sample_levels(z, x)
-            psamp_out = plot_digit(stack_ims(out), title="2 level")
-            psamp_x̂ = plot_digit(stack_ims(out_x̂), title="1 level")
-            psamp = plot(psamp_out, psamp_x̂)
-            log_image(lg, "sampling_$(epoch)", psamp)
-            display(psamp)
-        end
-
-        Lval = test_model(test_loader)
-        log_value(lg, "test loss", Lval)
-        @info "Test loss: $Lval"
-        if epoch % 50 == 0
-            save_model((Hx, Ha, Encoder), joinpath(save_folder, alias, savename(args) * "_$(epoch)eps"))
-        end
-    end
 end

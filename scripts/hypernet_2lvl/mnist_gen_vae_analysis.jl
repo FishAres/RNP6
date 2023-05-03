@@ -95,6 +95,7 @@ function stack_ims(xs; n=8)
 end
 
 ## ======
+using MLUtils
 args[:π] = 32
 # modelpath = "saved_models/hypernet_2lvl/mnist_2lvl/a_sample_len=8_add_offset=true_asz=6_bsz=64_esz=32_glimpse_len=4_ha_sz=32_img_channels=1_imzprod=784_scale_offset=2.4_seqlen=4_α=1.0_β=0.1_η=0.0001_λ=1e-6_λpatch=0.0_π=16_200eps.bson"
 
@@ -139,6 +140,29 @@ end
 
 ## =====
 
+function full_sequence_z0s(models::Tuple, z0, a0, x; args=args,
+    scale_offset=args[:scale_offset])
+    z0s = []
+    f_state, f_policy, Enc_za_z, Enc_za_a, Dec_z_x̂, Dec_z_a = models
+    z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=scale_offset)
+    out = sample_patch(x̂, a1, sampling_grid)
+    push!(z0s, cpu(z1))
+    for t in 2:args[:seqlen]
+        z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x; scale_offset=scale_offset)
+        out += sample_patch(x̂, a1, sampling_grid)
+        push!(z0s, cpu(z1))
+    end
+    return out, z0s
+end
+
+function full_sequence_z0s(z::AbstractArray, x; args=args, scale_offset=args[:scale_offset])
+    θsz = Hx(z)
+    θsa = Ha(z)
+    models, z0, a0 = get_models(θsz, θsa; args=args)
+    return full_sequence_z0s(models, z0, a0, x; args=args, scale_offset=scale_offset)
+end
+
+
 function get_μ_zs(x)
     z1s = []
     μ, logvar = Encoder(x)
@@ -146,13 +170,13 @@ function get_μ_zs(x)
     θsa = Ha(μ)
     models, z0, a0 = get_models(θsz, θsa; args=args)
     z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=args[:scale_offset])
-    out_small = full_sequence(z1, patch_t)
+    out_small, z0s = full_sequence_z0s(z1, patch_t)
     out = sample_patch(out_small, a1, sampling_grid)
     push!(z1s, cpu(z1))
     for t in 2:args[:seqlen]
         z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x;
             scale_offset=args[:scale_offset])
-        out_small = full_sequence(z1, patch_t)
+        out_small, z0s = full_sequence_z0s(z1, patch_t)
         out += sample_patch(out_small, a1, sampling_grid)
         push!(z1s, cpu(z1))
     end
