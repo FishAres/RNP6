@@ -183,7 +183,8 @@ function batched_conv_transpose(x, w, cdims)
 end
 
 "initialize without weights"
-function HyConvTranspose(kernelsize::Tuple,
+function HyConvTranspose(
+    kernelsize::Tuple,
     channels::Pair,
     batchsize::Integer,
     σ=identity;
@@ -210,7 +211,8 @@ function HyConvTranspose(W::AbstractArray{T,N}, b, σ=identity; stride=1, pad=0,
     return HyConvTranspose(W, b, σ, stride, pad, dilation, groups)
 end
 
-function HyConvTranspose(kernelsize::Tuple,
+function HyConvTranspose(
+    kernelsize::Tuple,
     channels::Pair,
     W::AbstractMatrix,
     σ=identity;

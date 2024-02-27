@@ -121,13 +121,13 @@ function model_loss(x, r; args=args)
     z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=args[:scale_offset])
     out_small = full_sequence(z1, patch_t)
     out = sample_patch(out_small, a1, sampling_grid)
-    Lpatch = Flux.mse(flatten(out_small), flatten(patch_t); agg=sum)
+    Lpatch = Flux.mse(flatten(x̂), flatten(patch_t); agg=sum)
     for t in 2:args[:seqlen]
         z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x;
             scale_offset=args[:scale_offset])
         out_small = full_sequence(z1, patch_t)
         out += sample_patch(out_small, a1, sampling_grid)
-        Lpatch += Flux.mse(flatten(out_small), flatten(patch_t); agg=sum)
+        Lpatch += Flux.mse(flatten(x̂), flatten(patch_t); agg=sum)
     end
     klqp = kl_loss(μ, logvar)
     rec_loss = Flux.mse(flatten(out), flatten(x); agg=sum)

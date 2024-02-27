@@ -18,7 +18,7 @@ include(srcdir("gen_vae_utils.jl"))
 CUDA.allowscalar(false)
 ## =======
 
-device!(1)
+device!(0)
 
 ## ======
 
@@ -51,11 +51,14 @@ function segment_eth80(img_files, map_files)
     segmented_ims = zeros(Float32, array_size[[2, 3, 1]]..., filenum)
     Threads.@threads for i in 1:filenum
         imfile = img_files[i]
-        imfile[map_files[i] .== 0.0f0] .= 0.0f0
+        imfile[map_files[i].==0.0f0] .= 0.0f0
         segmented_ims[:, :, :, i] = permutedims(imfile, [2, 3, 1])
     end
     return segmented_ims
 end
 
-# @time seg_ims = segment_eth80(img_files, map_files)
-# save(datadir("exp_pro", "eth80_segmented.jld2"), Dict("seg_ims" => seg_ims))
+## run
+img_files, map_files = load_eth_ims(datapath)
+
+@time seg_ims = segment_eth80(img_files, map_files)
+save(datadir("exp_pro", "eth80_segmented.jld2"), Dict("seg_ims" => seg_ims))
