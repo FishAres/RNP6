@@ -10,6 +10,7 @@
 /_research
 /tensorboard_logs
 tensorboard_logs
+/saved_models
 
 ################################################################################
 #                                    Julia                                     #
