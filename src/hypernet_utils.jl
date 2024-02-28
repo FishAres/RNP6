@@ -2,7 +2,11 @@ using Flux
 
 ## ==== some functions
 
-"get parameter sizes"
+"""
+Get parameter sizes of `model`
+# Arguments
+- `model::Chain`: Your neural network
+"""
 function get_param_sizes(model)
     nw = []
     for m in Flux.modules(model)
@@ -17,28 +21,48 @@ function get_param_sizes(model)
     return nw
 end
 
+
 function create_bias(weights::AbstractArray, bias::Bool, dims::Tuple...)
     return bias ? fill!(similar(weights, dims...), 0) : false
 end
-function split_bias(in::Integer, out::Integer, W::AbstractMatrix)
-    ab, bsz = size(W)
+
+"""
+Split a parameter array into weight and bias
+#Arguments
+- `in::Int`: input dimension
+- `out::Int`: output dimension
+- `Wb::AbstractMatrix`: Parameter matrix that contains both weight and bias
+...in retrospect this function is a little redundant
+"""
+function split_bias(in::Integer, out::Integer, Wb::AbstractMatrix)
+    w_b_size, _ = size(Wb)
     in_out = (in * out)
-    bsize = ab - in_out
-    W_ = reshape(W[1:in_out, :], out, in, :)
-    b_ = bsize > 0 ? W[(in_out+1):end, :] : false
-    return W_, b_
+    bsize = w_b_size - in_out
+    W = reshape(Wb[1:in_out, :], out, in, :)
+    b = bsize > 0 ? Wb[(in_out+1):end, :] : false
+    return W, b
 end
 
 ##==== Dense
 
+"""
+Dense (Linear) layer parameterized by a hypernet - i.e. parameters also have a batch size 
+"""
 struct HyDense
     weight::Any
     bias::Any
-    σ::Any
+    σ::Any # activation function
     HyDense(weight, b, σ) = new(weight, b, σ)
 end
 Flux.@functor HyDense
 
+"""
+Create a `HyDense` layer with weight dimensions (`in` x `out` x `bsz`)
+#Arguments
+- `bsz::Int`: batch size
+- `init::function`: parameter initialization function 
+- `bias::Bool`: whether or not layer should have a bias
+"""
 function HyDense(in::Integer, out::Integer, bsz::Integer, σ=identity;
     init=Flux.glorot_uniform, bias=true)
     w = init(out, in, bsz)
@@ -46,15 +70,22 @@ function HyDense(in::Integer, out::Integer, bsz::Integer, σ=identity;
     return HyDense(init(out, in, bsz), b, σ)
 end
 
-"single parameter matrix W, known input-output dims"
-function HyDense(in::Integer, out::Integer, W::AbstractMatrix, σ=identity)
-    W_, b_ = split_bias(in, out, W)
-    return HyDense(W_, b_, σ)
+"""
+Create a `HyDense` layer from single parameter matrix Wb, known input-output dims
+"""
+function HyDense(in::Integer, out::Integer, Wb::AbstractMatrix, σ=identity)
+    W, b = split_bias(in, out, Wb)
+    return HyDense(W, b, σ)
 end
 
+"""
+Evaluate the output of `HyDense` with input `x`
+This is the equivalent of "forward(self, x)" in Pytorch
+"""
 function (m::HyDense)(x::AbstractArray)
     σ = NNlib.fast_act(m.σ, x)  # replaces tanh => tanh_fast, etc
     x = length(size(x)) > 2 ? x : unsqueeze(x, 2)
+    # expand bias dimensions to fit with batch size
     b_ = isa(m.bias, AbstractArray) ? unsqueeze(m.bias, 2) : m.bias
     return σ.(batched_mul(m.weight, x) .+ b_)
 end
@@ -72,7 +103,7 @@ function Base.show(io::IO, l::HyDense)
     return print(io, ")")
 end
 
-## === Conv
+## === Convolutional
 
 struct HyConv
     weight::Any
@@ -86,13 +117,16 @@ end
 Flux.@functor HyConv
 
 function split_bias_conv(kernelsize::Tuple, in_channels::Integer, out_channels::Integer,
-    W::AbstractMatrix)
+    Wb::AbstractMatrix)
     bsize = out_channels
-    W_ = reshape(W[1:(end-bsize), :], kernelsize..., in_channels, out_channels, :)
-    b_ = bsize > 0 ? W[(end-bsize+1):end, :] : false
-    return W_, b_
+    W = reshape(Wb[1:(end-bsize), :], kernelsize..., in_channels, out_channels, :)
+    b = bsize > 0 ? Wb[(end-bsize+1):end, :] : false
+    return W, b
 end
 
+"""
+A hacky way to do a batched convolution
+"""
 function batched_conv(w, x, stride, pad)
     return cat([conv(a, b; stride=stride, pad=pad)
                 for
@@ -100,7 +134,6 @@ function batched_conv(w, x, stride, pad)
         dims=4)
 end
 
-"initialize without weights"
 function HyConv(kernelsize::Tuple,
     in_channels::Integer,
     out_channels::Integer,
@@ -115,7 +148,6 @@ function HyConv(kernelsize::Tuple,
     return HyConv(w, b, σ, stride, pad)
 end
 
-"single parameter matrix W, known input-output dims"
 function HyConv(kernelsize::Tuple,
     in_channels::Integer,
     out_channels::Integer,
@@ -134,7 +166,7 @@ function (m::HyConv)(x::AbstractArray)
     return σ.(batched_conv(m.weight, x, m.stride, m.pad) .+ b_)
 end
 
-## ==== conv transpose
+## ==== Conv transpose
 using NNlib: ∇conv_data
 import Flux: conv_transpose_dims, calc_padding, expand
 
@@ -146,7 +178,7 @@ struct HyConvTranspose
     pad::Any
     dilation::Any
     groups::Any
-    # HyConvTranspose(weight, b, σ, stride, pad, dilation, groups) = new(weight, b, σ, stride, pad, dilation, groups)
+    HyConvTranspose(weight, b, σ, stride, pad, dilation, groups) = new(weight, b, σ, stride, pad, dilation, groups)
 end
 Flux.@functor HyConvTranspose
 
@@ -182,7 +214,6 @@ function batched_conv_transpose(x, w, cdims)
         dims=4)
 end
 
-"initialize without weights"
 function HyConvTranspose(
     kernelsize::Tuple,
     channels::Pair,
@@ -196,36 +227,33 @@ function HyConvTranspose(
     groups=1)
     w = init(kernelsize..., channels[2], channels[1], batchsize)
     b = create_bias(w, bias, (size(w, 3), size(w, 5)))
-    # HyConvTranspose(w, b, σ, stride, pad, dilation, groups)
     return HyConvTranspose(w, b, σ; stride, pad, dilation, groups)
 end
 
-"single parameter matrix W, known input-output dims"
+"Single parameter matrix W, known input-output dims"
 function HyConvTranspose(W::AbstractArray{T,N}, b, σ=identity; stride=1, pad=0, dilation=1,
     groups=1) where {T,N}
     stride = expand(Val(N - 3), stride)
-    # println(N, " ", stride)
     dilation = expand(Val(N - 3), dilation)
+    # calculate padding
     pad = calc_padding(ConvTranspose, pad, size(W)[1:(N-3)], dilation, stride)
-    # W_, b_ = split_bias_conv(kernelsize, in_channels, out_channels, W)
     return HyConvTranspose(W, b, σ, stride, pad, dilation, groups)
 end
 
 function HyConvTranspose(
     kernelsize::Tuple,
     channels::Pair,
-    W::AbstractMatrix,
+    Wb::AbstractMatrix,
     σ=identity;
     stride=1,
     pad=0,
     dilation=1,
     groups=1)
     stride = expand(Val(5 - 3), stride)
-    # println(N, " ", stride)
     dilation = expand(Val(5 - 3), dilation)
-    pad = calc_padding(ConvTranspose, pad, size(W)[1:(5-3)], dilation, stride)
-    W_, b_ = split_bias_conv_transpose(kernelsize, channels[1], channels[2], W)
-    return HyConvTranspose(W_, b_, σ, stride, pad, dilation, groups)
+    pad = calc_padding(ConvTranspose, pad, size(Wb)[1:(5-3)], dilation, stride)
+    W, b = split_bias_conv_transpose(kernelsize, channels[1], channels[2], Wb)
+    return HyConvTranspose(W, b, σ, stride, pad, dilation, groups)
 end
 
 function (m::HyConvTranspose)(x::AbstractArray)
@@ -237,9 +265,10 @@ function (m::HyConvTranspose)(x::AbstractArray)
 end
 
 ## == RNNs
-@inline bmul(a, b) = dropdims(batched_mul(unsqueeze(a, 1), b); dims=1)
+"Convenient `batched_mul` on 3-dim arrays"
+bmul(a, b) = dropdims(batched_mul(unsqueeze(a, 1), b); dims=1)
 
-"RNN parameterized by Wh, Wx, b, with initial state h"
+"Hyper-RNN parameterized by Wh, Wx, b, with initial state h"
 function RN(Wh, Wx, b, h, x; f=elu)
     h = f.(bmul(h, Wh) + bmul(x, Wx) + b)
     return h, h
@@ -258,7 +287,8 @@ function gru_output(Wx, Wh, b, x, h)
     return gx, gh, r, z
 end
 
-function manzGRU(Wh, Wx, b, h, x)
+"Hyper-GRU parameterized by Wh, Wx, b, with initial state h"
+function HyGRU(Wh, Wx, b, h, x)
     b, o = b, size(h, 1)
     gx, gh, r, z = gru_output(Wx, Wh, b, x, h)
     h̃ = tanh.(gate(gx, o, 3) .+ r .* gate(gh, o, 3) .+ gate(b, o, 3))
@@ -274,7 +304,7 @@ function ps_to_RN(θ; rn_fun=RN, args=args, f_out=elu)
     return Flux.Recur(ft, h)
 end
 
-"size for RNN Wh, Wx, b"
+"Get parameter fx_sizes for RNN: Wh, Wx, b"
 get_rnn_θ_sizes(esz, hsz) = esz * hsz + hsz^2 + 2 * hsz
 
 function rec_rnn_θ_sizes(esz, hsz)
@@ -293,8 +323,10 @@ function get_rn_θs(rnn_θs, esz, hsz)
     return Wh, Wx, b, h
 end
 
-## maybe useful soon
 
+"""
+Maybe useful eventually
+"""
 function get_offsets(m::Flux.Chain)
     θ, re = Flux.destructure(m)
     m_offsets = re.offsets

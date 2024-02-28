@@ -42,8 +42,7 @@ device!(0)
 
 dev = gpu
 
-## =====
-
+## =====#
 eth80_train = load(datadir("exp_pro", "eth80_segmented_train.jld2"))["eth80_train"]
 eth80_test = load(datadir("exp_pro", "eth80_segmented_test.jld2"))["eth80_test"]
 
@@ -51,7 +50,8 @@ eth80_test = load(datadir("exp_pro", "eth80_segmented_test.jld2"))["eth80_test"]
 train_loader = DataLoader((dev(eth80_train)); batchsize=args[:bsz], shuffle=true,
     partial=false)
 test_loader = DataLoader((dev(eth80_test)); batchsize=args[:bsz], shuffle=true,
-    partial=false)
+
+       partial=false)
 
 ## =====
 
@@ -113,7 +113,8 @@ end
 
 function stack_ims(xs; n=8)
     n = n === nothing ? sqrt(length(xs)) : n
-    # xs = length(size(xs)) > 3 ? dropdims(xs, dims=3) : xs
+    # xs = length(size(xs)) > 3 ? dropdims(xs, dim
+s=3) : xs
     xs = collect(eachslice(xs, dims=4))
     rows_ = map(x -> hcat(x...), partition(xs, n))
     return vcat(rows_...)
@@ -184,7 +185,7 @@ mEnc_za_a = Chain(
     flatten,
 )
 l_enc_za_a = get_param_sizes(mEnc_za_a)
-# l_enc_za_a = (args[:π] + args[:asz]) * args[:esz] # encoder (z_t, a_t) -> a_t+1
+# l_enc_za_a = (args[:π] +[:asz]) * args[:esz] # encoder (z_t, a_t) -> a_t+1
 l_fa = get_rnn_θ_sizes(args[:esz], args[:π]) # same size for now
 l_dec_a = args[:asz] * args[:π] + args[:asz] # decoder z -> a, with bias
 
@@ -236,7 +237,8 @@ Encoder = gpu(let
     outsz = Flux.outputsize(enc1,
         (args[:img_size]..., args[:img_channels],
             args[:bsz]))
-    Chain(enc1,
+    Chain## =====
+(enc1,
         Dense(outsz[1], 64),
         LayerNorm(64, elu),
         Dense(64, 64),

@@ -17,25 +17,28 @@ Flux.@functor Split
 
 ## ======
 
-dense_plus(in_sz, lsz; f=elu, l2=BatchNorm) = Chain(Dense(in_sz, lsz), l2(lsz, f))
-
+"""
+Basic ResNet BasicBlock
+#Arguments
+- `channels::Pair{Int, Int}`: input and output channel dims
+- `connection::function`: Function to apply to input and output (usually +)
+"""
 function BasicBlock(channels::Pair{Int64,Int64}, connection; stride::Int64=1)
     layer = Chain(Conv((3, 3), channels; stride, pad=1, bias=false),
-                  BatchNorm(channels[2], relu),
-                  Conv((3, 3), channels[2] => channels[2]; pad=1, bias=false),
-                  BatchNorm(channels[2]))
+        BatchNorm(channels[2], relu),
+        Conv((3, 3), channels[2] => channels[2]; pad=1, bias=false),
+        BatchNorm(channels[2]))
     return Chain(SkipConnection(layer, connection), x -> relu.(x))
 end
 
 ## ==== saving
 
+"""
+To be deprecated. BSON.jl isn't great for saving models
+"""
 function save_model(model, savestring; local_=true)
     model = cpu(model)
-    if local_
-        full_str = "saved_models/" * savestring * ".bson"
-    else
-        full_str = savestring * ".bson"
-    end
+    full_str = savestring * ".bson"
     BSON.@save full_str model
     return println("saved at $(full_str)")
 end

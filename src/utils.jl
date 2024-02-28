@@ -1,6 +1,5 @@
 using LinearAlgebra, Statistics
 using Plots
-using BSON
 using StatsBase: sample
 using ArgParse
 
@@ -25,22 +24,16 @@ function partial(f, a...)
     return (b...) -> f(a..., b...)
 end
 
-function sample_loader(loader)
-    rand_int = rand(1:length(loader))
-    x_ = for (i, x) in enumerate(loader)
-        if i == rand_int
-            return x
-        end
-    end
-    return x_
-end
 
+"""
+Short-hand for Zygote.ignore() block
+"""
 stopgrad(x) =
     Zygote.ignore() do
         return x
     end
 
-"parse command line arguments"
+"Parse command line arguments"
 function parse_commandline()
     s = ArgParseSettings()
     @add_arg_table s begin
