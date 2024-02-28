@@ -1,5 +1,6 @@
 using LinearAlgebra, Statistics
 using Flux, Zygote, CUDA
+using Flux: flatten
 using Distributions
 using ProgressMeter
 using ProgressMeter: Progress
@@ -8,6 +9,7 @@ using Plots
 include(srcdir("interp_utils.jl"))
 include(srcdir("hypernet_utils.jl"))
 include(srcdir("nn_utils.jl"))
+include(srcdir("models.jl"))
 include(srcdir("plotting_utils.jl"))
 include(srcdir("logging_utils.jl"))
 
@@ -17,6 +19,48 @@ include(srcdir("utils.jl"))
 sample_z(μ, logvar, r) = μ + r .* (exp.(logvar))
 
 kl_loss(μ, logvar) = sum(@. (exp(logvar) + μ^2 - logvar - 1.0f0))
+
+"""
+Get indices at which to slice hypernet outputs
+#Arguments
+- `args::Dict`: script arguments
+"""
+function get_primary_bounds(args)
+    # == State network
+    mEnc_za_z = Chain( # dummy network to get parameter sizes from
+        HyDense(args[:π] + args[:asz], args[:layer_sz], args[:bsz], elu),
+        flatten,
+        HyDense(args[:layer_sz], args[:esz], args[:bsz], elu),
+        flatten,
+    )
+    l_enc_za_z = get_param_sizes(mEnc_za_z)
+    l_fx = get_rnn_θ_sizes(args[:esz], args[:π])
+
+    mdec = Chain( # dummy network
+        HyDense(args[:π], args[:layer_sz], args[:bsz], elu),
+        flatten,
+        HyDense(args[:layer_sz], 784, args[:bsz], relu),
+        flatten,
+    )
+    l_dec_x = get_param_sizes(mdec)
+
+    Hstate_bounds = [l_enc_za_z...; l_fx; l_dec_x...]
+
+    # == Policy network
+    mEnc_za_a = Chain( # dummy network
+        HyDense(args[:π] + args[:asz], args[:layer_sz], args[:bsz], elu),
+        flatten,
+        HyDense(args[:layer_sz], args[:esz], args[:bsz], elu),
+        flatten,
+    )
+    l_enc_za_a = get_param_sizes(mEnc_za_a)
+    l_fa = get_rnn_θ_sizes(args[:esz], args[:π]) # same size for now
+    l_dec_a = args[:asz] * args[:π] + args[:asz] # decoder z -> a, with bias
+
+    Hpolicy_bounds = [l_enc_za_a...; l_fa; l_dec_a]
+    return Hstate_bounds, Hpolicy_bounds
+end
+
 
 """
 Generate the "state" models of an RNP module, given the output of H_state
@@ -34,18 +78,18 @@ function get_fstate_models(θs, Hstate_bounds; args=args, fz=args[:f_z])
     Θvec = [θs[(inds[i]+1):inds[i+1], :] for i in 1:(length(inds)-1)]
 
     Enc_za_z = Chain(
-        HyDense(args[:π] + args[:asz], 64, Θvec[1], elu),
+        HyDense(args[:π] + args[:asz], args[:layer_sz], Θvec[1], elu),
         flatten,
-        HyDense(64, args[:esz], Θvec[2], elu),
+        HyDense(args[:layer_sz], args[:esz], Θvec[2], elu),
         flatten
     )
 
     f_state = ps_to_RN(get_rn_θs(Θvec[3], args[:esz], args[:π]); f_out=fz)
 
     Dec_z_x̂ = Chain(
-        HyDense(args[:π], 64, Θvec[4], elu),
+        HyDense(args[:π], args[:layer_sz], Θvec[4], elu),
         flatten,
-        HyDense(64, 784, Θvec[5], relu6),
+        HyDense(args[:layer_sz], 784, Θvec[5], relu6),
         flatten)
 
     z0 = fz.(Θvec[6])
@@ -68,8 +112,8 @@ function get_fpolicy_models(θs, Hpolicy_bounds; args=args)
     Θvec = [θs[(inds[i]+1):inds[i+1], :] for i in 1:(length(inds)-1)]
 
     Enc_za_a = Chain(
-        HyDense(args[:π] + args[:asz], 64, Θvec[1], elu),
-        HyDense(64, args[:esz], Θvec[2], elu),
+        HyDense(args[:π] + args[:asz], args[:layer_sz], Θvec[1], elu),
+        HyDense(args[:layer_sz], args[:esz], Θvec[2], elu),
         flatten
     )
     f_policy = ps_to_RN(get_rn_θs(Θvec[3], args[:esz], args[:π]); f_out=elu)
@@ -196,7 +240,7 @@ function model_loss(x, r; args=args)
 end
 
 """
-Dirty function to reduce number of pushes in the loop
+Dirty function to reduce number of pushes in `get_loop``
 """
 Zygote.@nograd function push_to_arrays!(outputs, arrays)
     for (output, array) in zip(outputs, arrays)
@@ -208,9 +252,8 @@ end
 Generate output sequence: full recs, local recs, affine transforms (as), image patches
 """
 function get_loop(x; args=args)
-
     output_list = patches, recs, as, patches_t = [], [], [], [], []
-    r = dev(rand(args[:vae_dist], args[:π], args[:bsz]))
+    r = dev(randn(Float32, args[:π], args[:bsz]))
     μ, logvar = Encoder(x)
     z = sample_z(μ, logvar, r)
     θs_state = H_state(z)
@@ -249,7 +292,7 @@ end
 
 
 """
-Train an RNP! 
+Train an RNP for one epoch! 
 # Arguments
 - `opt::Optimiser`: Your optimizer
 - `ps::Flux.params`: (Implicit) model parameters 
@@ -297,6 +340,43 @@ function test_model(test_loader; args=args)
     return L / length(test_loader)
 end
 
+function train_model(ps, train_loader, test_loader, save_dir; args=args, n_epochs=10, logger=nothing, clip_grads=false, sample_every=5, save_every=10, inc_lpatch=false, plotting_func=plot_digit)
+    has_logger = logger !== nothing
+    opt = ADAM(args[:lr])
+    losses = []
+    for epoch in 1:n_epochs
+
+        inc_lpatch & (epoch % 5 == 0) && begin # increment patch loss
+            args[:λpatch] = max(args[:λpatch] + 1.0f-3, 1.0f-2)
+            has_logger && log_value(logger, "λpatch", args[:λpatch])
+        end
+
+        ls = train_epoch(opt, ps, train_loader; epoch=epoch, logger=logger, clip_grads=clip_grads)
+
+        inds = sample(1:args[:bsz], 6, replace=false)
+        p = plot_recs(sample_loader(test_loader), inds)
+        display(p)
+        has_logger && log_image(logger, "recs_$(epoch)", p)
+
+        if epoch % sample_every == 0
+            z = randn(Float32, args[:π], args[:bsz]) |> gpu
+            out = sample_(z, x)
+            psamp = stack_ims(out) |> plotting_func
+            has_logger && log_image(lg, "sampling_$(epoch)", psamp)
+            display(psamp)
+        end
+
+        Ltest = test_model(test_loader)
+        has_logger && log_value(logger, "test loss", Ltest)
+        @info "Test loss: $Ltest"
+
+        epoch % save_every == 0 && begin
+            save_model((H_state, H_policy, Encoder), joinpath("saved_models/" * save_dir, savename(args) * "_$(epoch)eps"))
+        end
+        push!(losses, ls)
+    end
+    return vcat(losses...)
+end
 
 
 ## ==== plotting =====
