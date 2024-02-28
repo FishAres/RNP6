@@ -38,7 +38,7 @@ args[:imzprod] = prod(args[:img_size])
 
 ## =====
 
-device!(1)
+device!(0)
 
 dev = gpu
 
@@ -46,9 +46,6 @@ dev = gpu
 
 train_digits, train_labels = MNIST(; split=:train)[:]
 test_digits, test_labels = MNIST(; split=:test)[:]
-
-# train_labels = Float32.(Flux.onehotbatch(train_labels, 0:9))
-# test_labels = Float32.(Flux.onehotbatch(test_labels, 0:9))
 
 train_loader = DataLoader((dev(train_digits)); batchsize=args[:bsz], shuffle=true,
     partial=false)
@@ -96,7 +93,7 @@ end
 
 
 ## =====
-args[:π] = 32
+args[:π] = 8
 args[:D] = Normal(0.0f0, 1.0f0)
 
 mEnc_za_z = Chain(
@@ -195,6 +192,7 @@ ps = Flux.params(Hx, Ha, Encoder)
 
 ## ====
 
+
 x = first(test_loader)
 inds = sample(1:args[:bsz], 6; replace=false)
 let
@@ -217,6 +215,8 @@ args[:α] = 1.0f0
 args[:β] = 0.1f0
 
 args[:η] = 1e-4
+
+ps
 
 opt = ADAM(args[:η])
 lg = new_logger(joinpath(save_folder, alias), args)
@@ -258,6 +258,11 @@ begin
     end
 end
 ## =====
+inds = sample(1:args[:bsz], 6, replace=false)
+p = plot_recs(sample_loader(test_loader), inds, plot_seq=true)
+display(p)
+
+## ====
 save_model((Hx, Ha, Encoder), joinpath(save_folder, alias, savename(args) * "_11eps"))
 
 ## ====
