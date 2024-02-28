@@ -27,3 +27,14 @@ function plot_digit!(x; color=:grays, alpha=1, boundc=true, kwargs...)
         alpha=alpha,
         kwargs...)
 end
+
+"""
+Stack the arrays in `xs` into an `n x n` grid
+"""
+function stack_ims(xs; n=nothing)
+    n = n === nothing ? sqrt(length(xs)) : n
+    xs = length(size(xs)) > 3 ? dropdims(xs, dims=3) : xs
+    xs = collect(eachslice(xs, dims=3))
+    rows_ = map(x -> hcat(x...), partition(xs, n))
+    return vcat(rows_...)
+end

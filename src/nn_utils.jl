@@ -34,15 +34,11 @@ end
 ## ==== saving
 
 """
-Deprecated-ish. BSON.jl isn't great for saving models
+To be deprecated. BSON.jl isn't great for saving models
 """
 function save_model(model, savestring; local_=true)
     model = cpu(model)
-    if local_
-        full_str = "saved_models/" * savestring * ".bson"
-    else
-        full_str = savestring * ".bson"
-    end
+    full_str = savestring * ".bson"
     BSON.@save full_str model
     return println("saved at $(full_str)")
 end

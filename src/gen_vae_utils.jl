@@ -27,12 +27,12 @@ Generate the "state" models of an RNP module, given the output of H_state
 - `fz::function`: The activation function for the state RNN
 """
 function get_fstate_models(θs, Hstate_bounds; args=args, fz=args[:f_z])
+    @assert size(θs, 1) == sum([Hstate_bounds...; args[:π]])
     inds = Zygote.ignore() do # pad parameter slicing offsets
         return [0; cumsum([Hstate_bounds...; args[:π]])]
     end
     Θvec = [θs[(inds[i]+1):inds[i+1], :] for i in 1:(length(inds)-1)]
 
-    #
     Enc_za_z = Chain(
         HyDense(args[:π] + args[:asz], 64, Θvec[1], elu),
         flatten,
@@ -61,6 +61,7 @@ Generate the "state" models of an RNP module, given the output of H_policy
  corresponding to individual networks in the RNP module
 """
 function get_fpolicy_models(θs, Hpolicy_bounds; args=args)
+    @assert size(θs, 1) == sum([Hpolicy_bounds...; args[:asz]])
     inds = Zygote.ignore() do # pad parameter slicing offsets
         return [0; cumsum([Hpolicy_bounds...; args[:asz]])]
     end
@@ -83,10 +84,10 @@ Get full RNP module from hypernet outputs
 #Arguments
 - `θs_state::Array`: output of H_state hypernetwork
 - `θs_policy::Array`: output of H_policy hypernetwork
-- `Hstate_bounds::Vector`: vector of parameter indices
-- `Hpolicy_bounds::Vector`: vector of parameter indices
+`Hstate_bounds::Vector[Int]` and `Hpolicy_bounds::Vector[Int]`
+must be in scope (to avoid propagating their value everywhere) 
 """
-function get_models(θs_state, θs_policy, Hstate_bounds, Hpolicy_bounds; args=args)
+function get_models(θs_state, θs_policy; args=args)
     (Enc_za_z, f_state, Dec_z_x̂), z0 = get_fstate_models(θs_state, Hstate_bounds; args=args)
     (Enc_za_a, f_policy, Dec_z_a), a0 = get_fpolicy_models(θs_policy, Hpolicy_bounds; args=args)
     # pack models into tuple 
@@ -98,8 +99,8 @@ end
 Get full RNP module from ``z`` vector at level ``k``
 """
 function get_models(z; args=args)
-    θs_state = Hx(z)
-    θs_policy = Ha(z)
+    θs_state = H_state(z)
+    θs_policy = H_policy(z)
     # yay multiple dispatch
     models, z0, a0 = get_models(θs_state, θs_policy; args=args)
     return models, z0, a0
@@ -145,7 +146,7 @@ function full_sequence(models::Tuple, z0, a0, x; args=args,
     f_state, f_policy, Enc_za_z, Enc_za_a, Dec_z_x̂, Dec_z_a = models
     z_t, a_t, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=scale_offset)
     # initialize the output patch for the sequence
-    output = sample_patch(x̂, a1, sampling_grid)
+    output = sample_patch(x̂, a_t, sampling_grid)
     for t in 2:args[:seqlen]
         z_t, a_t, x̂, patch_t = forward_pass(z_t, a_t, models, x; scale_offset=scale_offset)
         output += sample_patch(x̂, a_t, sampling_grid)
@@ -209,7 +210,7 @@ Generate output sequence: full recs, local recs, affine transforms (as), image p
 function get_loop(x; args=args)
 
     output_list = patches, recs, as, patches_t = [], [], [], [], []
-    r = gpu(rand(args[:vae_dist], args[:π], args[:bsz]))
+    r = dev(rand(args[:vae_dist], args[:π], args[:bsz]))
     μ, logvar = Encoder(x)
     z = sample_z(μ, logvar, r)
     θs_state = H_state(z)
@@ -222,12 +223,30 @@ function get_loop(x; args=args)
     for t in 2:args[:seqlen]
         z_t, a_t, x̂, patch_t = forward_pass(z_t, a_t, models, x;
             scale_offset=args[:scale_offset])
-        out_small = full_sequence(z1, patch_t)
+        out_small = full_sequence(z_t, patch_t)
         output += sample_patch(out_small, a_t, sampling_grid)
         push_to_arrays!((output, out_small, a_t, patch_t), output_list)
     end
     return output_list
 end
+
+"Generate 2-level samples from ``z²`` vector `z`"
+function sample_(z, x; args=args)
+    θs_state = H_state(z)
+    θs_policy = H_policy(z)
+    models, z0, a0 = get_models(θs_state, θs_policy; args=args)
+    z_t, a_t, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=args[:scale_offset])
+    out_small = full_sequence(z_t, patch_t)
+    output = sample_patch(out_small, a_t, sampling_grid)
+    for t in 2:args[:seqlen]
+        z_t, a_t, x̂, patch_t = forward_pass(z_t, a_t, models, x;
+            scale_offset=args[:scale_offset])
+        out_small = full_sequence(z_t, patch_t)
+        output += sample_patch(out_small, a_t, sampling_grid)
+    end
+    return output |> cpu
+end
+
 
 """
 Train an RNP! 
@@ -238,12 +257,13 @@ Train an RNP!
 - `logger::TensorBoardLogger`: Optional TensorBoard logger
 - `clip_grads::Bool`: Whether or not to clip gradients before updating parameters
 
+Note: Device `dev` (`const`) must be in global scope
 """
-function train_model(opt, ps, train_loader; args=args, epoch=1, logger=nothing, clip_grads=false)
+function train_epoch(opt, ps, train_loader; args=args, epoch=1, logger=nothing, clip_grads=false)
     progress_tracker = Progress(length(train_loader), 1, "Training epoch $epoch :)")
     losses = zeros(length(train_loader))
     # initial z's drawn from N(0,1)
-    rs = gpu([rand(args[:vae_dist], args[:π], args[:bsz]) for _ in 1:length(train_loader)])
+    rs = dev([randn(Float32, args[:π], args[:bsz]) for _ in 1:length(train_loader)])
     for (i, x) in enumerate(train_loader)
         loss, grad = withgradient(ps) do
             rec_loss, klqp = model_loss(x, rs[i])
@@ -252,7 +272,7 @@ function train_model(opt, ps, train_loader; args=args, epoch=1, logger=nothing, 
                 return log_value(lg, "KL loss", klqp)
             end
             full_loss = args[:α] * rec_loss + args[:β] * klqp
-            return full_loss + args[:λ] * (norm(Flux.params(Hx)) + norm(Flux.params(Ha)))
+            return full_loss + args[:λ] * (norm(Flux.params(H_state)) + norm(Flux.params(H_policy)))
         end
         clip_grads && foreach(x -> clamp!(x, -0.1f0, 0.1f0), grad)
         Flux.update!(opt, ps, grad)
@@ -264,9 +284,11 @@ end
 
 """
 Test loss for RNP
+
+Note: Device `dev` (`const`) must be in global scope
 """
 function test_model(test_loader; args=args)
-    rs = gpu([rand(args[:vae_dist], args[:π], args[:bsz]) for _ in 1:length(test_loader)])
+    rs = dev([randn(Float32, args[:π], args[:bsz]) for _ in 1:length(test_loader)])
     L = 0.0f0 # initialize test loss to 0
     for (i, x) in enumerate(test_loader)
         rec_loss, klqp = model_loss(x, rs[i])
@@ -274,6 +296,10 @@ function test_model(test_loader; args=args)
     end
     return L / length(test_loader)
 end
+
+
+
+## ==== plotting =====
 
 """
 Plot the reconstruction next to the input image
@@ -285,9 +311,9 @@ Plot the reconstruction next to the input image
 function plot_rec(reconstruction, x, batch_ind; kwargs...)
     out_reshaped = reshape(cpu(reconstruction), args[:img_size]..., size(out)[end])
     x_ = reshape(cpu(x), args[:img_size]..., size(x)[end])
-    p1 = plot_digit(out_reshaped[:, :, batch_ind])
-    p2 = plot_digit(x_[:, :, batch_ind])
-    return plot(p1, p2, kwargs...)
+    p_x = plot_digit(x_[:, :, batch_ind])
+    p_output = plot_digit(out_reshaped[:, :, batch_ind])
+    return plot(p_x, p_output, kwargs...)
 end
 
 """
@@ -301,10 +327,10 @@ Plot reconstructions and generated patches next to the input image
 function plot_rec_seq(reconstruction, x, patches, batch_ind; args=args)
     out_ = reshape(cpu(reconstruction), args[:img_size]..., :)
     x_ = reshape(cpu(x), args[:img_size]..., :)
-    p_output = plot_digit(out_[:, :, batch_ind])
     p_x = plot_digit(x_[:, :, batch_ind])
+    p_output = plot_digit(out_[:, :, batch_ind])
     p_patch = plot([plot_digit(patch[:, :, 1, batch_ind]; boundc=false) for patch in patches]...)
-    return plot(p_output, p_x, p_patch; layout=(1, 3))
+    return plot(p_x, p_output, p_patch; layout=(1, 3))
 end
 
 """

@@ -15,32 +15,30 @@ include(srcdir("gen_vae_utils.jl"))
 
 CUDA.allowscalar(false)
 ## ====
-args = Dict(:bsz => 64,
+args = Dict(
+    :bsz => 64, # batch size
     :img_size => (28, 28),
-    :π => 64, # latent dim size
+    :π => 8, # latent dim size / state RNN hidden dim size
     :img_channels => 1,
     :esz => 32, # RNN input size
     :ha_sz => 32, # policy RNN hidden size
-    :α => 1.0f0,
-    :β => 0.1f0,
-    :add_offset => true,
-    :fa_out => identity,
-    :f_z => elu,
+    :f_z => elu, # state RNN activation
+    :α => 1.0f0, # rec. loss weighting
+    :β => 0.1f0, # KL weighting
+    :add_offset => true, # add scale offset to affine transforms
     :asz => 6, # of spatial transformer params
-    :glimpse_len => 4,
-    :seqlen => 5,
+    :seqlen => 3, # RNP sequence length
+    :lr => 1e-4, # learning rate
     :λ => 1.0f-3, # hypernet regularization weight
-    :λpatch => Float32(1 / 4),
-    :a_sample_len => 8,
-    :scale_offset => 1.6f0,
-    :D => Normal(0.0f0, 1.0f0))
+    :λpatch => Float32(1 / 4), # patch reconstruction regularization weight
+    :scale_offset => 1.6f0, # affine transform scale offset
+)
 args[:imzprod] = prod(args[:img_size])
 
 ## =====
 
-device!(0)
-
-dev = gpu
+# device!(0) # specify gpu if there are multiple
+const dev = has_cuda() ? gpu : cpu
 
 ## =====
 
@@ -54,8 +52,6 @@ test_loader = DataLoader((dev(test_digits)); batchsize=args[:bsz], shuffle=true,
 
 ## =====
 
-dev = has_cuda() ? gpu : cpu
-
 const sampling_grid = (dev(get_sampling_grid(args[:img_size]...)))[1:2, :, :]
 # constant matrices for "nice" affine transformation
 const ones_vec = dev(ones(1, 1, args[:bsz]))
@@ -64,37 +60,8 @@ diag_vec = [[1.0f0 0.0f0; 0.0f0 1.0f0] for _ in 1:args[:bsz]]
 const diag_mat = dev(cat(diag_vec...; dims=3))
 const diag_off = dev(cat(1.0f-6 .* diag_vec...; dims=3))
 
-## ====
-
-function sample_(z, x; args=args)
-    θsz = Hx(z)
-    θsa = Ha(z)
-    models, z0, a0 = get_models(θsz, θsa; args=args)
-    z1, a1, x̂, patch_t = forward_pass(z0, a0, models, x; scale_offset=args[:scale_offset])
-    out_small = full_sequence(z1, patch_t)
-    out = sample_patch(out_small, a1, sampling_grid)
-    for t in 2:args[:seqlen]
-        z1, a1, x̂, patch_t = forward_pass(z1, a1, models, x;
-            scale_offset=args[:scale_offset])
-        out_small = full_sequence(z1, patch_t)
-        out += sample_patch(out_small, a1, sampling_grid)
-    end
-    return out |> cpu
-end
-
-
-function stack_ims(xs; n=8)
-    n = n === nothing ? sqrt(length(xs)) : n
-    xs = length(size(xs)) > 3 ? dropdims(xs, dims=3) : xs
-    xs = collect(eachslice(xs, dims=3))
-    rows_ = map(x -> hcat(x...), partition(xs, n))
-    return vcat(rows_...)
-end
-
 
 ## =====
-args[:π] = 8
-args[:D] = Normal(0.0f0, 1.0f0)
 
 mEnc_za_z = Chain(
     HyDense(args[:π] + args[:asz], 64, args[:bsz], elu),
@@ -104,8 +71,7 @@ mEnc_za_z = Chain(
 )
 
 l_enc_za_z = get_param_sizes(mEnc_za_z)
-# l_enc_za_z = (args[:π] + args[:asz]) * args[:esz] # encoder (z_t, a_t) -> z_t+1
-l_fx = get_rnn_θ_sizes(args[:esz], args[:π]) # μ, logvar
+l_fx = get_rnn_θ_sizes(args[:esz], args[:π])
 
 mdec = Chain(HyDense(args[:π], 64, args[:bsz], elu),
     flatten,
@@ -115,7 +81,7 @@ mdec = Chain(HyDense(args[:π], 64, args[:bsz], elu),
 
 l_dec_x = get_param_sizes(mdec)
 
-Hx_bounds = [l_enc_za_z...; l_fx; l_dec_x...]
+const Hstate_bounds = [l_enc_za_z...; l_fx; l_dec_x...]
 
 mEnc_za_a = Chain(
     HyDense(args[:π] + args[:asz], 64, args[:bsz], elu),
@@ -124,13 +90,13 @@ mEnc_za_a = Chain(
     flatten,
 )
 l_enc_za_a = get_param_sizes(mEnc_za_a)
-# l_enc_za_a = (args[:π] + args[:asz]) * args[:esz] # encoder (z_t, a_t) -> a_t+1
 l_fa = get_rnn_θ_sizes(args[:esz], args[:π]) # same size for now
 l_dec_a = args[:asz] * args[:π] + args[:asz] # decoder z -> a, with bias
 
-Ha_bounds = [l_enc_za_a...; l_fa; l_dec_a]
+const Hpolicy_bounds = [l_enc_za_a...; l_fa; l_dec_a]
 
-Hx = Chain(LayerNorm(args[:π]),
+## =====
+H_state = Chain(LayerNorm(args[:π]),
     Dense(args[:π], 64),
     LayerNorm(64, elu),
     Dense(64, 64),
@@ -139,17 +105,17 @@ Hx = Chain(LayerNorm(args[:π]),
     LayerNorm(64, elu),
     Dense(64, 64),
     LayerNorm(64, elu),
-    Dense(64, sum(Hx_bounds) + args[:π], bias=false),
+    Dense(64, sum(Hstate_bounds) + args[:π], bias=false),
 ) |> gpu
 
-Ha = Chain(LayerNorm(args[:π]),
+H_policy = Chain(LayerNorm(args[:π]),
     Dense(args[:π], 64),
     LayerNorm(64, elu),
     Dense(64, 64),
     LayerNorm(64, elu),
     Dense(64, 64),
     LayerNorm(64, elu),
-    Dense(64, sum(Ha_bounds) + args[:asz]; bias=false)
+    Dense(64, sum(Hpolicy_bounds) + args[:asz]; bias=false)
 ) |> gpu
 
 # init_hyper!(Hx)
@@ -188,10 +154,8 @@ Encoder = gpu(let
         Split(Dense(128, args[:π]), Dense(128, args[:π])))
 end)
 
-ps = Flux.params(Hx, Ha, Encoder)
-
+ps = Flux.params(H_state, H_policy, Encoder)
 ## ====
-
 
 x = first(test_loader)
 inds = sample(1:args[:bsz], 6; replace=false)
@@ -200,9 +164,8 @@ let
     display(p)
 end
 ## =====
-save_folder = "hypernet_2lvl_larger_za_z_enc"
-alias = "mnist_2lvl_2"
-save_dir = get_save_dir(save_folder, alias)
+save_folder = "RNP_2lvl_mnist"
+save_dir = get_save_dir(save_folder, "")
 
 ## =====
 args[:seqlen] = 3
@@ -216,31 +179,27 @@ args[:β] = 0.1f0
 
 args[:η] = 1e-4
 
-ps
-
 opt = ADAM(args[:η])
 lg = new_logger(joinpath(save_folder, alias), args)
-log_value(lg, "learning_rate", opt.eta)
+
+
 ## ====
-begin
+function train_model(opt, ps, train_loader, test_loader; n_epochs=10, logger=nothing, clip_grad=False, sample_every=5)
     Ls = []
-    for epoch in 1:50
-        if epoch % 50 == 0
-            opt.eta = 0.67 * opt.eta
-            log_value(lg, "learning_rate", opt.eta)
-        end
+    for epoch in 1:n_epochs
         if epoch % 5 == 0
             args[:λpatch] = max(args[:λpatch] + 1.0f-3, 1.0f-2)
-            log_value(lg, "λpatch", args[:λpatch])
+            log_value(logger, "λpatch", args[:λpatch])
         end
 
-        ls = train_model(opt, ps, train_loader; epoch=epoch, logger=lg)
+        ls = train_epoch(opt, ps, train_loader; epoch=epoch, logger=logger)
+
         inds = sample(1:args[:bsz], 6, replace=false)
         p = plot_recs(sample_loader(test_loader), inds)
         display(p)
-        log_image(lg, "recs_$(epoch)", p)
+        logger !== nothing && log_image(logger, "recs_$(epoch)", p)
 
-        if epoch % 5 == 0
+        if epoch % sample_every == 0
             z = randn(Float32, args[:π], args[:bsz]) |> gpu
             out = sample_(z, x)
             psamp = stack_ims(out) |> plot_digit
@@ -249,23 +208,22 @@ begin
         end
 
         Lval = test_model(test_loader)
-        log_value(lg, "test loss", Lval)
+        log_value(logger, "test loss", Lval)
         @info "Test loss: $Lval"
-        if epoch % 50 == 0
+        if epoch == n_epochs
             save_model((Hx, Ha, Encoder), joinpath(save_folder, alias, savename(args) * "_$(epoch)eps"))
         end
         push!(Ls, ls)
     end
 end
+
+save_model((H_state, H_policy, Encoder), joinpath(save_dir, savename(args) * "_$(100)eps"))
+
+modelpath = "saved_models/RNP_2lvl_mnist/add_offset=true_asz=6_bsz=64_esz=32_ha_sz=32_img_channels=1_imzprod=784_scale_offset=1.9_seqlen=3_α=1.0_β=0.1_η=0.0001_λ=1e-6_λpatch=0.0_π=8_100eps.bson"
+H_state, H_policy, Encoder = load(modelpath)[:model] |> gpu
+
 ## =====
-inds = sample(1:args[:bsz], 6, replace=false)
-p = plot_recs(sample_loader(test_loader), inds, plot_seq=true)
-display(p)
 
-## ====
-save_model((Hx, Ha, Encoder), joinpath(save_folder, alias, savename(args) * "_11eps"))
-
-## ====
 x = first(test_loader)
 begin
     z = randn(Float32, args[:π], args[:bsz]) |> gpu
@@ -342,22 +300,6 @@ function sample_patches(z, x; args=args)
 end
 
 
-function rgb_to_orange(x)
-    a = x
-    b = 0.65f0 .* x
-    c = 0.0f0 .* x
-    cat(a, b, c, dims=3)
-end
-
-function orange_on_rgb(xs)
-    orange_patch = rgb_to_orange(xs[end])
-    min.(cat(xs[1:3]..., dims=3) .+ orange_patch, 1.0f0)
-end
-
-function view_patches_rgb(patches, ind)
-    im_array = orange_on_rgb(patches)
-    colorview(RGB, permutedims(im_array[:, :, :, ind], [3, 1, 2]))
-end
 
 begin
     z = randn(Float32, args[:π], args[:bsz]) |> gpu
