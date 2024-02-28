@@ -1,5 +1,6 @@
 using LinearAlgebra, Statistics
 using Flux, Zygote, CUDA
+using Flux: flatten
 using Distributions
 using ProgressMeter
 using ProgressMeter: Progress
@@ -339,7 +340,7 @@ function test_model(test_loader; args=args)
     return L / length(test_loader)
 end
 
-function train_model(ps, train_loader, test_loader, save_dir; args=args, n_epochs=10, logger=nothing, clip_grads=false, sample_every=5, save_every=10, inc_lpatch=false)
+function train_model(ps, train_loader, test_loader, save_dir; args=args, n_epochs=10, logger=nothing, clip_grads=false, sample_every=5, save_every=10, inc_lpatch=false, plotting_func=plot_digit)
     has_logger = logger !== nothing
     opt = ADAM(args[:lr])
     losses = []
@@ -360,13 +361,13 @@ function train_model(ps, train_loader, test_loader, save_dir; args=args, n_epoch
         if epoch % sample_every == 0
             z = randn(Float32, args[:π], args[:bsz]) |> gpu
             out = sample_(z, x)
-            psamp = stack_ims(out) |> plot_digit
+            psamp = stack_ims(out) |> plotting_func
             has_logger && log_image(lg, "sampling_$(epoch)", psamp)
             display(psamp)
         end
 
         Ltest = test_model(test_loader)
-        has_logger && log_value(logger, "test loss", Lval)
+        has_logger && log_value(logger, "test loss", Ltest)
         @info "Test loss: $Ltest"
 
         epoch % save_every == 0 && begin

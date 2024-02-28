@@ -1,8 +1,8 @@
 ## Refactoring todo
 
-- [ ] Group scripts that train models
+- [X] Group scripts that train models
 
-- [ ] Group scripts that analyze models
+- [X] Group scripts that analyze models
 
 - [ ] Use same utils for different models (i.e. ETH80, recursive) where possible
 

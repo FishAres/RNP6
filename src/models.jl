@@ -27,7 +27,8 @@ function generate_hypernets(args)
     )
 
     Encoder = let
-        enc1 = Chain(x -> reshape(x, args[:img_size]..., args[:img_channels], :),
+        enc1 = Chain(
+            x -> reshape(x, args[:img_size]..., args[:img_channels], :),
             Conv((5, 5), args[:img_channels] => 32),
             BatchNorm(32, relu),
             Conv((5, 5), 32 => 32),

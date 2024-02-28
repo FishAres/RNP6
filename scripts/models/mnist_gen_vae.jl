@@ -71,10 +71,6 @@ let
     display(p)
 end
 
-opt = ADAM(args[:lr])
-losses = train_epoch(opt, ps, train_loader)
-
-
 ## =====
 save_folder, alias = "RNP_2lvl_mnist", ""
 save_dir = get_save_dir(save_folder, alias)
@@ -83,8 +79,6 @@ lg = new_logger(joinpath(save_folder, alias), args)
 losses = train_model(ps, train_loader, test_loader, save_dir; n_epochs=1, logger=lg)
 
 ## =====
-
-
 
 function sample_patches(z, x; args=args)
     outputs = recs, comb_patches, patches, trans_patches, as, patches_t = [], [], [], [], [], [], []
