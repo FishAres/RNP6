@@ -38,6 +38,7 @@ args[:imzprod] = prod(args[:img_size])
 const dev = has_cuda() ? gpu : cpu
 
 ## =====#
+# Run src/process_eth80.jl to get the processed ETH80 data
 eth80_train = load(datadir("exp_pro", "eth80_segmented_train.jld2"))["eth80_train"]
 eth80_test = load(datadir("exp_pro", "eth80_segmented_test.jld2"))["eth80_test"]
 
