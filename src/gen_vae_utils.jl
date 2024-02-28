@@ -194,15 +194,20 @@ function model_loss(x, r; args=args)
     return rec_loss + args[:λpatch] * Lpatch, klqp
 end
 
-
-"Generate output sequence: full recs, local recs, affine transforms (as), image patches"
-function get_loop(x; args=args)
-    # Dirty function to reduce number of pushes in the loop
-    Zygote.@nograd function push_to_arrays!(outputs, arrays)
-        for (output, array) in zip(outputs, arrays)
-            push!(array, cpu(output))
-        end
+"""
+Dirty function to reduce number of pushes in the loop
+"""
+Zygote.@nograd function push_to_arrays!(outputs, arrays)
+    for (output, array) in zip(outputs, arrays)
+        push!(array, cpu(output))
     end
+end
+
+"""
+Generate output sequence: full recs, local recs, affine transforms (as), image patches
+"""
+function get_loop(x; args=args)
+
     output_list = patches, recs, as, patches_t = [], [], [], [], []
     r = gpu(rand(args[:vae_dist], args[:π], args[:bsz]))
     μ, logvar = Encoder(x)
@@ -277,7 +282,7 @@ Plot the reconstruction next to the input image
 - `x::Array`: the target image
 - `batch_ind::Int`: the element in the batch of `x` and `reconstruction` to plot
 """
-function plot_rec(reconstruction, x, batch_ind; args=args, kwargs...)
+function plot_rec(reconstruction, x, batch_ind; kwargs...)
     out_reshaped = reshape(cpu(reconstruction), args[:img_size]..., size(out)[end])
     x_ = reshape(cpu(x), args[:img_size]..., size(x)[end])
     p1 = plot_digit(out_reshaped[:, :, batch_ind])
@@ -293,7 +298,7 @@ Plot reconstructions and generated patches next to the input image
 - `patches::Vector[Array]`:: the patches at k=1
 - `batch_ind::Int`: the element in the batch of `x` and `reconstruction` to plot
 """
-function plot_rec_seq(reconstruction, x, patches::Vector[Array], batch_ind; args=args)
+function plot_rec_seq(reconstruction, x, patches, batch_ind; args=args)
     out_ = reshape(cpu(reconstruction), args[:img_size]..., :)
     x_ = reshape(cpu(x), args[:img_size]..., :)
     p_output = plot_digit(out_[:, :, batch_ind])

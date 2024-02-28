@@ -11,7 +11,7 @@ using Distributions
 using StatsBase: sample
 using Random: shuffle
 
-include(srcdir("gen_vae_utils_larger.jl"))
+include(srcdir("gen_vae_utils.jl"))
 
 CUDA.allowscalar(false)
 ## ====
