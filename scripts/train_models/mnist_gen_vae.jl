@@ -100,8 +100,6 @@ function sample_patches(z, x; args=args)
     return outputs
 end
 
-isa(patches[1], AbstractArray)
-
 
 include(srcdir("model_utils.jl"))
 

@@ -33,9 +33,12 @@ end
 Stack the arrays in `xs` into an `n x n` grid
 """
 function stack_ims(xs; n=nothing)
+    sz = size(xs)
     n = n === nothing ? trunc(Int, sqrt(size(xs)[end])) : n
-    xs = if length(size(xs)) > 3 & size(xs, 3) == 1
+    xs = if length(sz) > 3 & size(xs, 3) == 1
         xs = dropdims(xs, dims=3)
+        collect(eachslice(xs, dims=3))
+    elseif length(sz) == 3
         collect(eachslice(xs, dims=3))
     else
         collect(eachslice(xs, dims=4))
