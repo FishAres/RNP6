@@ -11,7 +11,7 @@ using Distributions
 using StatsBase: sample
 using Random: shuffle
 using MLUtils
-include(srcdir("gen_vae_utils_larger.jl"))
+include(srcdir("eth80_vae_utils.jl"))
 
 CUDA.allowscalar(false)
 ## ====
@@ -55,7 +55,7 @@ test_loader = DataLoader((dev(eth80_test)); batchsize=args[:bsz], shuffle=true,
 
 ## =====
 
-dev = has_cuda() ? gpu : cpu
+const dev = has_cuda() ? gpu : cpu
 
 const sampling_grid = (dev(get_sampling_grid(args[:img_size]...)))[1:2, :, :]
 # constant matrices for "nice" affine transformation
@@ -66,34 +66,7 @@ const diag_mat = dev(cat(diag_vec...; dims=3))
 const diag_off = dev(cat(1.0f-6 .* diag_vec...; dims=3))
 
 ## ====
-function get_fstate_models(θs, Hx_bounds; args=args, fz=args[:f_z])
-    inds = Zygote.ignore() do
-        return [0; cumsum([Hx_bounds...; args[:π]])]
-    end
-    Θ = [θs[(inds[i]+1):inds[i+1], :] for i in 1:(length(inds)-1)]
 
-    Enc_za_z = Chain(
-        HyDense(args[:π] + args[:asz], 64, Θ[1], elu),
-        flatten,
-        HyDense(64, args[:esz], Θ[2], elu),
-        flatten
-    )
-
-    f_state = ps_to_RN(get_rn_θs(Θ[3], args[:esz], args[:π]); f_out=fz)
-
-    # conv decoder
-    Dec_z_x̂ = Chain(
-        HyDense(args[:π], 400, Θ[4], elu),
-        x -> reshape(x, 10, 10, 4, :),
-        HyConvTranspose((5, 5), 4 => 32, Θ[5], relu; stride=1),
-        HyConvTranspose((4, 4), 32 => 32, Θ[6], relu; stride=2, pad=2),
-        HyConvTranspose((4, 4), 32 => 3, Θ[7], relu; stride=2, pad=2)
-    )
-
-    z0 = fz.(Θ[8])
-
-    return (Enc_za_z, f_state, Dec_z_x̂), z0
-end
 
 function sample_(z, x; args=args)
     θsz = Hx(z)

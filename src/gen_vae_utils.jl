@@ -371,7 +371,7 @@ function train_model(ps, train_loader, test_loader, save_dir; args=args, n_epoch
         @info "Test loss: $Ltest"
 
         epoch % save_every == 0 && begin
-            save_model((H_state, H_policy, Encoder), joinpath("saved_models/" * save_dir, savename(args) * "_$(epoch)eps"))
+            save_model((H_state, H_policy, Encoder), joinpath(save_dir, savename(args) * "_$(epoch)eps"))
         end
         push!(losses, ls)
     end
