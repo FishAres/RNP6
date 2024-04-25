@@ -50,7 +50,7 @@ test_loader = DataLoader((dev(eth80_test)); batchsize=args[:bsz], shuffle=true,
 
 ## =====
 # constant matrices for "nice" affine transformation
-const sampling_grid = (dev(get_sampling_grid(args[:img_size]...)))[1:2, :, :]
+const sampling_grid = dev(get_sampling_grid(args[:img_size]...)[1:2, :, :])
 const ones_vec = dev(ones(1, 1, args[:bsz]))
 const zeros_vec = dev(zeros(1, 1, args[:bsz]))
 diag_vec = [[1.0f0 0.0f0; 0.0f0 1.0f0] for _ in 1:args[:bsz]]

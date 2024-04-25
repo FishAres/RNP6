@@ -33,12 +33,23 @@ end
 
 ## ==== saving
 
-"""
-To be deprecated. BSON.jl isn't great for saving models
-"""
-function save_model(model, savestring; local_=true)
-    model = cpu(model)
-    full_str = savestring * ".bson"
-    BSON.@save full_str model
-    return println("saved at $(full_str)")
+# """
+# To be deprecated. BSON.jl isn't great for saving models
+# """
+# function save_model(model, savestring; local_=true)
+#     model = cpu(model)
+#     full_str = savestring * ".bson"
+#     BSON.@save full_str model
+#     return println("saved at $(full_str)")
+# end
+
+function save_model(model, savestring)
+    model_state = Flux.state(model |> cpu)
+    jldsave(savestring * ".jld2"; model_state)
+    println("saved at $savestring")
+end
+
+function load_model(model, savestring)
+    ms = JLD2.load(savestring * ".jld2", "model_state")
+    Flux.loadmodel!(model, ms)
 end
